@@ -71,6 +71,7 @@ async function omniSearch(req, res, next) {
     const dataQuery = `
       SELECT
         s.id,
+        s.public_id,
         s.scientific_name,
         s.english_name,
         s.bengali_name,
@@ -138,6 +139,7 @@ async function searchSuggest(req, res, next) {
     const result = await pool.query(
       `SELECT
         s.id,
+        s.public_id,
         s.scientific_name,
         s.english_name,
         s.bengali_name,

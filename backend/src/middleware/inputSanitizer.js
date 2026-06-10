@@ -17,17 +17,21 @@ const sanitizeHtml = require('sanitize-html');
  */
 function sanitizeValue(value, maxLength = 10000) {
   if (typeof value === 'string') {
-    // Allow basic rich text formatting, strip everything else
-    const cleanHTML = sanitizeHtml(value, {
+    const trimmed = value.trim().substring(0, maxLength);
+
+    // Only pay the HTML sanitization cost when the input actually looks like HTML.
+    if (!trimmed.includes('<')) {
+      return trimmed;
+    }
+
+    const cleanHTML = sanitizeHtml(trimmed, {
       allowedTags: ['b', 'i', 'em', 'strong', 'a', 'p', 'br', 'ul', 'ol', 'li'],
       allowedAttributes: {
         'a': ['href', 'target', 'rel']
       },
     });
-    
-    return cleanHTML
-      .trim()
-      .substring(0, maxLength); // Enforce max length
+
+    return cleanHTML.trim();
   }
   if (Array.isArray(value)) {
     return value.map((item) => sanitizeValue(item, maxLength));

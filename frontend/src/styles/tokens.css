@@ -65,12 +65,15 @@
   --fauna-color: #c06c30;
   --fauna-bg: rgba(192, 108, 48, 0.08);
 
-  /* --- Conservation Status Colors --- */
-  --status-lc: #2d8a4e;
-  --status-nt: #7cb342;
+  /* --- Conservation Status Colors (Official IUCN) --- */
+  --status-ne: #d1d1d1;
+  --status-dd: #d1d1d1;
+  --status-lc: #006666;
+  --status-nt: #4d8a16;
   --status-vu: #f9a825;
   --status-en: #ef6c00;
   --status-cr: #d32f2f;
+  --status-re: #8b0000;
   --status-ew: #6a1b9a;
-  --status-ex: #37474f;
+  --status-ex: #000000;
 }

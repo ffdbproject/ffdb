@@ -1,9 +1,14 @@
 const { pool } = require('../config/db');
+const { normalizeOptionalString } = require('../utils/normalize');
 
 let teamTableReady = false;
+let teamTableCheckedAt = 0;
+const TEAM_TABLE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 async function ensureTeamTable() {
-  if (teamTableReady) return;
+  // Cache the check result for 5 minutes so it auto-refreshes
+  // if the table is dropped and recreated without restarting the process
+  if (teamTableReady && (Date.now() - teamTableCheckedAt < TEAM_TABLE_CACHE_TTL)) return;
 
   const existsResult = await pool.query(
     `SELECT 1
@@ -13,17 +18,12 @@ async function ensureTeamTable() {
   );
 
   if (existsResult.rows.length === 0) {
+    teamTableReady = false;
     throw new Error('team_members table is missing. Import backend/src/db/schema.sql on the database first.');
   }
 
   teamTableReady = true;
-}
-
-function normalizeOptionalString(value, maxLen) {
-  if (value === undefined || value === null) return null;
-  const out = String(value).trim();
-  if (!out) return null;
-  return maxLen ? out.slice(0, maxLen) : out;
+  teamTableCheckedAt = Date.now();
 }
 
 async function getPublicTeam(_req, res, next) {

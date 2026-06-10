@@ -4,10 +4,7 @@
 // ============================================================
 
 const jwt = require('jsonwebtoken');
-
-// 🔒 SECURITY: Prefer JWT_SECRET, but keep ADMIN_API_KEY as a fallback so
-// auth continues to work while cPanel env vars are being refreshed.
-const secret = process.env.JWT_SECRET || process.env.ADMIN_API_KEY || 'dev-temporary-secret-change-before-deploying';
+const { jwtSecret } = require('../utils/auth');
 
 /**
  * Admin auth guard middleware.
@@ -37,7 +34,7 @@ function adminAuth(req, res, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, secret);
+    const decoded = jwt.verify(token, jwtSecret);
     if (decoded.role !== 'admin') {
       throw new Error('Invalid role');
     }

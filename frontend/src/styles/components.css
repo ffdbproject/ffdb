@@ -142,6 +142,209 @@
 }
 
 /* ============================================
+   HAMBURGER MENU
+   ============================================ */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  gap: 5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  z-index: 1001;
+}
+
+.hamburger-line {
+  width: 24px;
+  height: 2.5px;
+  background: var(--text-primary);
+  border-radius: 2px;
+  transition: all 0.3s ease;
+  transform-origin: center;
+}
+
+.hamburger.active .hamburger-line:nth-child(1) {
+  transform: translateY(10px) rotate(45deg);
+}
+
+.hamburger.active .hamburger-line:nth-child(2) {
+  opacity: 0;
+}
+
+.hamburger.active .hamburger-line:nth-child(3) {
+  transform: translateY(-10px) rotate(-45deg);
+}
+
+/* Mobile Navigation */
+.navbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.mobile-menu-overlay {
+  display: none;
+  position: fixed;
+  top: 70px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 999;
+}
+
+.mobile-search {
+  display: none;
+  position: relative;
+  width: 100%;
+}
+
+.mobile-search input {
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+.mobile-search .search-suggestions {
+  position: fixed;
+  top: auto;
+  left: 0;
+  right: 0;
+  max-height: 50vh;
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Mobile adjustments: move hamburger further left and constrain search */
+@media (max-width: 900px) {
+  .navbar {
+    padding: 0 8px; /* reduce horizontal padding on small screens */
+  }
+
+  .navbar .container {
+    height: 64px;
+  }
+
+  .hamburger {
+    display: flex;
+    margin-left: 2px; /* reduce left space so hamburger sits near edge */
+    margin-right: 8px;
+  }
+
+  .navbar-logo {
+    margin-left: 6px; /* logo sits immediately after hamburger */
+  }
+
+  /* Keep search in header but limit width so it doesn't push layout */
+  .navbar-search {
+    max-width: 260px;
+    min-width: 0;
+    flex: 0 0 auto;
+  }
+
+  .navbar-search input {
+    width: 140px;
+    transition: width 0.2s ease;
+  }
+
+  .navbar-search:focus-within input {
+    width: 180px;
+  }
+
+  /* Make nav links use drawer; hide desktop links if necessary */
+  .navbar-nav {
+    /* Use transform/opacity for smooth transitions instead of display toggling */
+    display: flex;
+    position: fixed;
+    top: 64px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    flex-direction: column;
+    background: var(--bg-primary);
+    z-index: 1100;
+    border-top: 1px solid var(--border-color);
+    overflow-y: auto;
+    padding: 16px 12px 22px;
+    width: 100%;
+    max-width: none;
+    transform: translateY(-8px);
+    opacity: 0;
+    visibility: hidden;
+    transition: transform 220ms cubic-bezier(.2,.9,.2,1), opacity 220ms ease, visibility 0s linear 220ms;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+  }
+
+  .navbar-nav.open {
+    transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
+    transition: transform 260ms cubic-bezier(.2,.9,.2,1), opacity 260ms ease;
+  }
+
+  .navbar-links {
+    flex-direction: column;
+    width: 100%;
+    margin: 0;
+    padding: 4px 0;
+    gap: 6px;
+  }
+
+  .navbar-links li {
+    width: 100%;
+  }
+
+  .navbar-links a {
+    display: block;
+    padding: 14px 12px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+    transition: var(--transition-fast);
+  }
+
+  .navbar-links a:hover {
+    background: var(--accent-subtle);
+    color: var(--accent-primary);
+  }
+
+  .navbar-links a.active {
+    color: var(--accent-primary);
+    background: rgba(13, 124, 102, 0.1);
+  }
+
+  .mobile-menu-overlay {
+    display: block;
+    top: 64px;
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 260ms ease, visibility 0s linear 260ms;
+    touch-action: none;
+  }
+
+  .menu-open .mobile-menu-overlay {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 260ms ease;
+  }
+}
+
+.mobile-suggestions {
+  max-height: 60vh !important;
+}
+
+/* ============================================
    HERO SECTION
    ============================================ */
 .hero {
@@ -341,6 +544,20 @@
   font-style: italic;
 }
 
+.search-suggestion-item .bengali-name {
+  font-family: 'Noto Serif Bengali', 'Noto Serif', serif;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: left;
+  margin: 4px 0;
+  line-height: 1.2;
+}
+
+/* Home page search input should prefer Noto Serif Bengali for Bengali text */
+#home-search-input {
+  font-family: 'Noto Serif Bengali', 'Noto Serif', serif;
+}
+
 /* ============================================
    SECTION HEADERS
    ============================================ */
@@ -530,14 +747,17 @@
 .conservation-badge.vu { background: var(--status-vu); }
 .conservation-badge.en { background: var(--status-en); }
 .conservation-badge.cr { background: var(--status-cr); }
+.conservation-badge.re { background: var(--status-re); }
 .conservation-badge.ew { background: var(--status-ew); }
 .conservation-badge.ex { background: var(--status-ex); }
+.conservation-badge.dd { background: var(--status-dd); color: #333; }
+.conservation-badge.ne { background: var(--status-ne); color: #333; }
 
 /* ============================================
    SPECIES DETAIL PAGE
    ============================================ */
 .species-detail {
-  padding: 30px 0 80px;
+  padding: 30px 24px 80px;
 }
 
 .species-breadcrumb {
@@ -1394,6 +1614,35 @@ textarea.form-control {
   .admin-main {
     margin-left: 0;
   }
+
+  /* Tablet drawer should cover the viewport instead of appearing as a narrow window */
+  .navbar-nav {
+    width: 100%;
+    max-width: none;
+  }
+
+  .navbar-nav.open {
+    display: flex;
+    position: fixed;
+    top: 64px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1100;
+    flex-direction: column;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-color);
+    overflow-y: auto;
+    padding: 16px 12px 22px;
+    height: calc(100vh - 64px);
+    min-height: calc(100dvh - 64px);
+    max-height: none;
+  }
+
+  .navbar-links {
+    width: 100%;
+    margin: 0;
+  }
 }
 
 @media (max-width: 768px) {
@@ -1402,117 +1651,211 @@ textarea.form-control {
     padding-top: 8px;
     margin-bottom: 18px;
   }
+
+  /* Navbar Mobile Styles */
   .navbar .container {
-    flex-wrap: wrap;
-    height: auto;
-    padding: 12px 0;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .hamburger {
+    display: flex;
+    order: -1;
+  }
+
+  .navbar-logo {
+    flex: 0 1 auto;
+    justify-content: flex-start;
+    margin-left: 8px;
+  }
+
+  /* ensure search stays in header on mobile */
+  .navbar-search {
+    display: flex;
+    order: 2;
+    margin-left: auto;
+    align-items: center;
     gap: 8px;
   }
-  .navbar-logo {
-    width: 100%;
-    justify-content: center;
-  }
-  .navbar-links {
-    display: flex;
-    width: 100%;
-    overflow-x: visible;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 2px 0 4px;
-    justify-content: center;
-    scrollbar-width: none;
-  }
-  .navbar-links::-webkit-scrollbar { display: none; }
-  .navbar-links li { flex: 0 0 auto; }
-  .navbar-links a { white-space: nowrap; }
-  .navbar-search {
-    flex: 1;
-    min-width: 0;
-    width: 100%;
-  }
+
   .navbar-search input {
+    width: 140px;
+    max-width: 50vw;
+  }
+
+  .navbar-nav {
+    top: 64px;
+  }
+
+  .mobile-menu-overlay {
+    top: 64px;
+  }
+
+  .navbar-links {
+    flex-direction: column;
+    width: min(560px, 100%);
+    margin: 0 auto;
+    padding: 4px 0;
+    gap: 6px;
+  }
+
+  .navbar-links li {
     width: 100%;
   }
+
+  .navbar-links a {
+    display: block;
+    padding: 14px 12px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.1px;
+    transition: var(--transition-fast);
+  }
+
+  .navbar-links a:hover {
+    background: var(--accent-subtle);
+    color: var(--accent-primary);
+  }
+
+  .navbar-links a.active {
+    color: var(--accent-primary);
+    background: rgba(13, 124, 102, 0.1);
+  }
+
+  .mobile-search {
+    display: block;
+    padding: 16px;
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    margin-top: 8px;
+  }
+
+  .mobile-search input {
+    width: 100%;
+    padding: 10px 16px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    background: var(--bg-secondary);
+  }
+
+  .mobile-search .search-suggestions {
+    max-height: 40vh;
+    top: calc(100% + 54px);
+  }
+
+  .search-suggestion-item {
+    padding: 10px 16px;
+    gap: 8px;
+  }
+
+  .search-suggestion-item .name {
+    font-size: 13px;
+  }
+
+  .search-suggestion-item .scientific {
+    font-size: 11px;
+  }
+
   .navbar {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     background: var(--bg-card);
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
   }
-  .species-card-category.flora,
-  .species-card-category.fauna,
-  .species-card-status-badge,
-  .conservation-badge {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
+
   .navbar-search-icon {
     display: none;
   }
+
   .search-suggestions {
     width: 100%;
   }
+
   .hero {
     min-height: auto;
     padding: 40px 0;
   }
+
   .hero-content {
     padding: 0 16px;
   }
+
   .hero-content h1 {
     font-size: 28px;
   }
+
   .hero-stats {
     gap: 20px;
   }
+
   .hero-stat .number {
     font-size: 22px;
   }
+
   .species-grid {
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 12px;
   }
+
   .search-bar-wrap {
     flex-direction: column;
     border-radius: var(--radius);
     padding: 12px;
   }
+
   .search-bar-btn {
     width: 100%;
     justify-content: center;
   }
+
   .section-header h2 {
     font-size: 18px;
   }
+
   .container {
     padding: 0 16px;
   }
+
   .footer-content {
     flex-direction: column;
     gap: 12px;
     text-align: center;
   }
+
   .footer-links {
     flex-wrap: wrap;
     gap: 12px;
   }
+
   .footer-social {
     gap: 12px;
   }
+
   .filters-bar {
     flex-direction: column;
     padding: 12px;
   }
+
   .filter-select {
     min-width: unset;
     width: 100%;
   }
+
   .form-row {
     grid-template-columns: 1fr;
   }
+
   .map-container {
     height: 280px;
   }
+
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }

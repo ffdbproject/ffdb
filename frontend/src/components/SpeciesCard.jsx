@@ -1,11 +1,12 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import SafeImage from './SafeImage';
 
 /**
  * Reusable species card component.
  * Used in species grid listings on Homepage, Browse, and Search pages.
  */
-export default function SpeciesCard({ species }) {
+export default function SpeciesCard({ species, index = 0 }) {
+  const location = useLocation();
   const {
     id,
     scientific_name,
@@ -13,23 +14,51 @@ export default function SpeciesCard({ species }) {
     bengali_name,
     category,
     conservation_status,
-    family,
     primary_image,
+    primary_image_thumbnail,
     origin,
   } = species;
 
   const displayName = english_name || bengali_name || scientific_name;
   const statusClass = (conservation_status || '').toLowerCase();
 
+  const publicId = species.public_id || id;
+
+  const handleCardClick = () => {
+    try {
+      const currentPath = `${location.pathname}${location.search}${location.hash}`;
+      sessionStorage.setItem('ffdb_return_scroll_y', String(window.scrollY || 0));
+      sessionStorage.setItem('ffdb_return_path', currentPath);
+    } catch {
+      // ignore storage failures
+    }
+  };
+
   return (
-    <Link to={`/species/${id}`} className="species-card" id={`species-card-${id}`}>
+    <Link
+      to={`/species/${publicId}`}
+      className="species-card"
+      id={`species-card-${publicId}`}
+      onClick={handleCardClick}
+    >
       <div className="species-card-img-wrap">
         {primary_image ? (
           <SafeImage
-            src={primary_image}
-            alt={displayName}
+            src={primary_image_thumbnail || (() => {
+              try {
+                if (primary_image && primary_image.startsWith('/uploads/')) {
+                  const parts = primary_image.split('/');
+                  const name = parts[parts.length - 1];
+                  return `/uploads/${name.replace(/(\.[^.]+)$/, '-sm$1')}`;
+                }
+              } catch {}
+              return primary_image;
+            })()}
+            imageName={scientific_name}
+            skipProxy
+            alt={`Photo of ${displayName}`}
             className="species-card-image"
-            loading="lazy"
+            loading={index < 2 ? 'eager' : 'lazy'}
             referrerPolicy="no-referrer"
           />
         ) : (

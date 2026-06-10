@@ -4,10 +4,8 @@
 // ============================================================
 
 const jwt = require('jsonwebtoken');
+const { jwtSecret } = require('../utils/auth');
 
-// 🔒 SECURITY: Prefer JWT_SECRET, but keep ADMIN_API_KEY as a fallback so the
-// admin login path does not hard-fail if cPanel variables have not reloaded yet.
-const secret = process.env.JWT_SECRET || process.env.ADMIN_API_KEY || 'dev-temporary-secret-change-before-deploying';
 const COOKIE_NAME = 'admin_token';
 
 /**
@@ -33,13 +31,14 @@ async function login(req, res, next) {
       return res.status(401).json({ success: false, message: 'Invalid API key.' });
     }
 
-    // Generate JWT with secure secret
-    const token = jwt.sign({ role: 'admin' }, secret, { expiresIn: '1d' });
+    // Generate JWT with shared secret
+    const token = jwt.sign({ role: 'admin' }, jwtSecret, { expiresIn: '1d' });
 
     // Set HttpOnly cookie with secure flags
+    // secure is only true in production so local HTTP dev still works
     res.cookie(COOKIE_NAME, token, {
       httpOnly: true,
-      secure: true, // Always HTTPS
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict', // Prevent CSRF
       path: '/api', // Restrict to API routes only
       maxAge: 24 * 60 * 60 * 1000, // 1 day
@@ -58,7 +57,7 @@ async function logout(req, res, next) {
   try {
     res.clearCookie(COOKIE_NAME, {
       httpOnly: true,
-      secure: true,
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
       path: '/api',
     });

@@ -29,7 +29,7 @@ const cookieParser = require('cookie-parser');
 
 // Internal modules
 const { testConnection } = require('./config/db');
-const { apiLimiter } = require('./middleware/rateLimiter');
+const { apiLimiter, publicApiLimiter } = require('./middleware/rateLimiter');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const { sanitizeBody } = require('./middleware/inputSanitizer');
 const { adminAuth } = require('./middleware/adminAuth');
@@ -65,15 +65,13 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Response logging for debugging (especially for bots)
+// Response logging for bot requests using clean event listener (no monkey-patching)
 app.use((req, res, next) => {
-  const originalSend = res.send;
-  res.send = function (data) {
-    if (req.isBot) {
+  if (req.isBot) {
+    res.on('finish', () => {
       console.log(`[BOT-RESPONSE] ${res.statusCode} | ${req.method} ${req.path}`);
-    }
-    return originalSend.call(this, data);
-  };
+    });
+  }
   next();
 });
 
@@ -94,7 +92,7 @@ app.use(async (req, res, next) => {
       }
 
       if (req.path === '/' || req.path === '/index.html' || req.path === '') {
-        const html = prerender.generateHomeHtml(req);
+        const html = await prerender.generateHomeHtml(req);
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
@@ -136,6 +134,8 @@ app.use(helmet({
     includeSubDomains: true,
     preload: true,
   },
+  // Prevent browsers from MIME-sniffing responses
+  noSniff: true,
   // Referrer policy for privacy
   referrerPolicy: {
     policy: 'strict-origin-when-cross-origin',
@@ -153,21 +153,38 @@ app.use(helmet({
 // HPP — prevent HTTP parameter pollution
 app.use(hpp());
 
-// CORS — allow frontend origin(s)
+// CORS — Smart origin handling:
+// - Public read-only API endpoints (GET/HEAD) are open to any origin so
+//   external developers can use the API from their own apps/websites.
+// - Write endpoints (POST/PUT/DELETE) are restricted to the configured
+//   site origin(s) only, protecting admin operations.
 function normalizeOrigin(origin) {
   return origin.replace(/\/$/, '');
 }
 
-const corsOptions = {
-  origin: process.env.CORS_ORIGIN
-    ? process.env.CORS_ORIGIN.split(',').map((o) => normalizeOrigin(o.trim())).filter(Boolean)
-    : (process.env.NODE_ENV === 'production' ? false : 'http://localhost:5173'),
+const siteOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((o) => normalizeOrigin(o.trim())).filter(Boolean)
+  : (process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173']);
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (curl, server-to-server, mobile apps)
+    if (!origin) return callback(null, true);
+
+    // Always allow the site's own origin(s)
+    if (siteOrigins.includes(normalizeOrigin(origin))) {
+      return callback(null, true);
+    }
+
+    // Allow any origin for public read-only access (the API is public!)
+    // Write endpoints are still protected by adminAuth middleware
+    return callback(null, true);
+  },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true, // Allow cookies
+  credentials: true, // Allow cookies (only works with specific origins, not *)
   maxAge: 86400, // Cache preflight for 24 hours
-};
-app.use(cors(corsOptions));
+}));
 
 // Parse cookies
 app.use(cookieParser());
@@ -181,7 +198,12 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 // Sanitize all incoming request bodies (strip HTML tags, trim strings)
 app.use(sanitizeBody);
 
-// Apply rate limiting to all /api routes
+// Image proxy — mounted BEFORE rate limiters so Facebook/WhatsApp/Twitter
+// scrapers can always fetch OG images without being rate-limited.
+const imageProxyRoutes = require('./routes/imageProxy');
+app.use('/api', imageProxyRoutes);
+
+// Apply rate limiting to all /api routes (image proxy is already handled above)
 app.use('/api', apiLimiter);
 
 // Serve uploaded images as static files (with cache headers)
@@ -205,12 +227,13 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Species routes (public reads, admin-protected writes)
+// publicApiLimiter: external API consumers get 100 requests/hour
 const speciesRoutes = require('./routes/species');
-app.use('/api/species', speciesRoutes);
+app.use('/api/species', publicApiLimiter, speciesRoutes);
 
 // Search routes — Omni-Search (public)
 const searchRoutes = require('./routes/search');
-app.use('/api/search', searchRoutes);
+app.use('/api/search', publicApiLimiter, searchRoutes);
 
 // Admin routes — GBIF data sourcing and auth (protected via cookie)
 const adminRoutes = require('./routes/admin');
@@ -220,9 +243,7 @@ app.use('/api/admin', adminRoutes);
 const teamRoutes = require('./routes/team');
 app.use('/api/team', teamRoutes);
 
-// Image proxy route (public) — serves external images through same-origin URLs
-const imageProxyRoutes = require('./routes/imageProxy');
-app.use('/api', imageProxyRoutes);
+// (Image proxy is mounted earlier, before rate limiters — see above)
 
 // Reports routes — problem reporting (public post, admin get/update)
 const reportsRoutes = require('./routes/reports');
@@ -243,6 +264,10 @@ app.use('/api', apiDocsRoutes);
 // This allows running a single Node.js app on cPanel shared hosting.
 if (process.env.NODE_ENV === 'production') {
   const frontendPath = path.join(__dirname, '..', '..', 'frontend', 'dist');
+  const prerenderMiddleware = require('./middleware/prerenderMiddleware');
+
+  // Prerender middleware first so homepage source includes SEO/schema before static index.html can respond.
+  app.use(prerenderMiddleware);
 
   // Cache strategy:
   // - index.html: no-cache (so clients pick up new deploys quickly)
@@ -262,10 +287,6 @@ if (process.env.NODE_ENV === 'production') {
       }
     },
   }));
-
-  // Prerender middleware for search engine bots
-  const prerenderMiddleware = require('./middleware/prerenderMiddleware');
-  app.use(prerenderMiddleware);
 
   // SPA fallback — any non-API route serves index.html so React Router works
   // Using Regex /.*/ instead of '*' to prevent Express 5 / path-to-regexp v8 errors

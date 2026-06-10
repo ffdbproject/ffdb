@@ -11,9 +11,11 @@
 // ============================================================
 
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { speciesAPI, gbifAPI, authAPI, teamAPI } from '../services/api';
+import { speciesAPI, gbifAPI, authAPI, teamAPI, databaseAPI } from '../services/api';
 import SafeImage from '../components/SafeImage';
+import { preloadRoute } from '../utils/routePreload';
 
 // ---- Status workflow helpers ----
 const STATUS_FLOW = {
@@ -42,6 +44,9 @@ const EMPTY_FORM = {
   description: '',
   habitat: '',
   conservation_status: '',
+  residency_status: 'resident',
+  references: '',
+  external_links: {},
   location_coordinates: [],
   featured_image_url: '',
   featured_image_credit: '',
@@ -55,16 +60,31 @@ const EMPTY_FORM = {
 //  MAIN ADMIN PAGE
 // ============================================================
 export default function AdminPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('dashboard');
 
   // Admin Auth Config
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
 
+  // Read tab from URL on mount
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam) {
+      setActiveTab(tabParam);
+    }
+  }, [searchParams]);
+
   useEffect(() => {
     authAPI.checkAuth()
-      .then(() => setIsAuthenticated(true))
-      .catch(() => setIsAuthenticated(false))
+      .then(() => {
+        setIsAuthenticated(true);
+        sessionStorage.setItem('ffdb_admin_authenticated', '1');
+      })
+      .catch(() => {
+        setIsAuthenticated(false);
+        sessionStorage.removeItem('ffdb_admin_authenticated');
+      })
       .finally(() => setAuthLoading(false));
   }, []);
 
@@ -73,6 +93,7 @@ export default function AdminPage() {
     const key = e.target.apiKey.value;
     try {
       await authAPI.login(key);
+      sessionStorage.setItem('ffdb_admin_authenticated', '1');
       setIsAuthenticated(true);
       window.location.reload();
     } catch (err) {
@@ -83,6 +104,7 @@ export default function AdminPage() {
   const handleLogout = async () => {
     try {
       await authAPI.logout();
+      sessionStorage.removeItem('ffdb_admin_authenticated');
       setIsAuthenticated(false);
     } catch (err) {
       alert('Logout failed');
@@ -105,8 +127,9 @@ export default function AdminPage() {
     return (
       <div className="container" style={{ paddingTop: '100px', maxWidth: '400px' }}>
         <Helmet>
-          <title>Admin Login | FFDB</title>
+          <title>Admin Login - FFDB</title>
           <meta name="robots" content="noindex, nofollow" />
+          <meta property="og:site_name" content="FFDB" />
         </Helmet>
         <div style={{ background: 'var(--bg-secondary)', padding: '30px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius)' }}>
           <h2 style={{ marginBottom: '20px' }}>Admin Login</h2>
@@ -125,8 +148,9 @@ export default function AdminPage() {
   return (
     <div className="page-enter admin-shell" id="admin-page">
       <Helmet>
-        <title>Admin Dashboard | FFDB</title>
+        <title>Admin Dashboard - FFDB</title>
         <meta name="robots" content="noindex, nofollow" />
+        <meta property="og:site_name" content="FFDB" />
       </Helmet>
       {/* ---- Admin Topbar ---- */}
       <div className="admin-topbar-shell" style={{
@@ -291,6 +315,7 @@ function DashboardTab() {
 //  SPECIES MANAGER TAB — Table + Create/Edit
 // ============================================================
 function SpeciesManagerTab() {
+  const navigate = useNavigate();
   const [species, setSpecies] = useState([]);
   const [pagination, setPagination] = useState({});
   const [loading, setLoading] = useState(true);
@@ -338,6 +363,63 @@ function SpeciesManagerTab() {
   }, [page, statusFilter, categoryFilter]);
 
   useEffect(() => { fetchSpecies(); }, [fetchSpecies]);
+
+  // ---- Export Database ----
+  const handleExport = async () => {
+    try {
+      showToast('Exporting database...', 'success');
+      const res = await databaseAPI.export();
+      if (res.success && res.data) {
+        const jsonStr = JSON.stringify(res.data, null, 2);
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ffdb-backup-${new Date().toISOString().split('T')[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('Export complete', 'success');
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Export failed', 'error');
+    }
+  };
+
+  // ---- Import Database ----
+  const handleImportClick = () => {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.json';
+    fileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const json = JSON.parse(event.target.result);
+          if (!window.confirm('This will merge the uploaded data into the existing database. Proceed?')) return;
+          
+          showToast('Importing database...', 'success');
+          const res = await databaseAPI.import(json);
+          if (res.success) {
+            showToast(res.message, 'success');
+            fetchSpecies();
+          } else {
+            showToast(res.message || 'Import failed', 'error');
+          }
+        } catch (err) {
+          console.error(err);
+          showToast('Invalid JSON file or import error', 'error');
+        }
+      };
+      reader.readAsText(file);
+    };
+    fileInput.click();
+  };
 
   // ---- Status workflow action ----
   const advanceStatus = async (id, currentStatus) => {
@@ -400,6 +482,9 @@ function SpeciesManagerTab() {
         description: s.description || '',
         habitat: s.habitat || null,
         conservation_status: s.conservation_status || '',
+        residency_status: s.residency_status || 'resident',
+        references: s.references || '',
+        external_links: s.external_links || {},
         location_coordinates: s.location_coordinates || [],
         featured_image_url: featuredImage?.image_url || '',
         featured_image_credit: featuredImage?.image_credit || '',
@@ -453,10 +538,15 @@ function SpeciesManagerTab() {
       .map((img) => img.image_credit || '')
       .join('\n');
 
+    const originalFeatured = dbImagesBackup.find((img) => img.is_primary) || {};
+    const originalFeaturedUrl = originalFeatured.image_url || '';
+    const originalFeaturedCredit = originalFeatured.image_credit || '';
+
     const urlsChanged = formData.additional_image_urls !== originalAdditionalUrls;
     const creditsChanged = formData.additional_image_credits !== originalAdditionalCredits;
+    const featuredChanged = (formData.featured_image_url || '') !== originalFeaturedUrl || (formData.featured_image_credit || '') !== originalFeaturedCredit;
 
-    if (editingId && !urlsChanged && !creditsChanged && pendingImages.featured === null && pendingImages.additional.length === 0) {
+    if (editingId && !urlsChanged && !creditsChanged && !featuredChanged && pendingImages.featured === null && pendingImages.additional.length === 0) {
       // No changes to URLs or uploads - use DB images as-is, only update featured credit
       const dbImages = dbImagesBackup.filter((img) => Boolean(img.image_url));
       images = dbImages.map((img) => ({
@@ -489,6 +579,9 @@ function SpeciesManagerTab() {
       description: formData.description,
       habitat: formData.habitat,
       conservation_status: formData.conservation_status,
+      residency_status: formData.residency_status,
+      references: formData.references,
+      external_links: formData.external_links,
       location_coordinates: formData.location_coordinates,
       status: formData.status,
       taxonomy: formData.taxonomy,
@@ -562,9 +655,32 @@ function SpeciesManagerTab() {
             {pagination.totalRecords ?? '—'} total records
           </p>
         </div>
-        <button className="btn btn-primary" id="btn-create-species" onClick={openCreate}>
-          <span>+</span> Add New Species
-        </button>
+        <div style={{ display: 'flex', gap: '12px' }}>
+          <button
+            className="btn btn-secondary"
+            onClick={handleExport}
+            title="Download full database as JSON"
+          >
+            Export DB
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={handleImportClick}
+            title="Upload JSON database backup"
+          >
+            Import DB
+          </button>
+          <button
+            className="btn btn-primary"
+            id="btn-create-species"
+            onClick={() => navigate('/admin/species/add')}
+            onMouseEnter={() => preloadRoute('/admin/species/add')}
+            onFocus={() => preloadRoute('/admin/species/add')}
+            onTouchStart={() => preloadRoute('/admin/species/add')}
+          >
+            <span>+</span> Add New Species
+          </button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -964,7 +1080,7 @@ function GBIFImportTab() {
                     <SafeImage
                       key={i}
                       src={img.url}
-                      alt=""
+                      alt={`GBIF image ${i + 1}`}
                       style={{
                         width: '80px',
                         height: '60px',
@@ -1552,13 +1668,30 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
               onChange={(e) => updateField('conservation_status', e.target.value)}
             >
               <option value="">Not Assessed</option>
+              <option value="NE">NE — Not Evaluated</option>
+              <option value="DD">DD — Data Deficient</option>
               <option value="LC">LC — Least Concern</option>
               <option value="NT">NT — Near Threatened</option>
               <option value="VU">VU — Vulnerable</option>
               <option value="EN">EN — Endangered</option>
               <option value="CR">CR — Critically Endangered</option>
+              <option value="RE">RE — Regionally Extinct</option>
               <option value="EW">EW — Extinct in the Wild</option>
               <option value="EX">EX — Extinct</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label htmlFor="form-residency">Residency Status</label>
+            <select
+              id="form-residency"
+              className="form-control"
+              value={formData.residency_status}
+              onChange={(e) => updateField('residency_status', e.target.value)}
+            >
+              <option value="resident">Resident</option>
+              <option value="migratory">Migratory</option>
+              <option value="summer_visitor">Summer Visitor</option>
+              <option value="vagrant">Vagrant</option>
             </select>
           </div>
         </div>
@@ -1583,6 +1716,46 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
             onChange={(e) => updateField('habitat', e.target.value)}
             placeholder="e.g. Mangrove forests, Sundarbans"
           />
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="form-references">References (HTML/Text)</label>
+          <textarea
+            id="form-references"
+            className="form-control"
+            value={formData.references}
+            onChange={(e) => updateField('references', e.target.value)}
+            placeholder="Source links, research papers, etc."
+            rows={4}
+          />
+        </div>
+
+        <div className="form-group" style={{ border: '1px solid var(--border-color)', padding: '16px', borderRadius: 'var(--radius)', background: 'var(--bg-secondary)' }}>
+          <h3 style={{ fontSize: '14px', marginBottom: '12px', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>External Links</h3>
+          <div className="form-row" style={{ marginBottom: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <label>Wikipedia URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.wikipedia || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, wikipedia: e.target.value })} placeholder="https://wikipedia.org/wiki/..." />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>iNaturalist URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.inaturalist || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, inaturalist: e.target.value })} placeholder="https://inaturalist.org/taxa/..." />
+            </div>
+          </div>
+          <div className="form-row">
+            <div style={{ flex: 1 }}>
+              <label>IUCN Redlist URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.iucn || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, iucn: e.target.value })} placeholder="https://iucnredlist.org/species/..." />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>GBIF URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.gbif || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, gbif: e.target.value })} placeholder="https://gbif.org/species/..." />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>EOL URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.eol || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, eol: e.target.value })} placeholder="https://eol.org/pages/..." />
+            </div>
+          </div>
         </div>
 
         <div className="form-group">
@@ -1763,6 +1936,7 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
                     location_coordinates: s.location_coordinates || prev.location_coordinates,
                     conservation_status: s.conservation_status || prev.conservation_status,
                     taxonomy: s.taxonomy || prev.taxonomy,
+                    external_links: Object.keys(s.external_links || {}).length > 0 ? s.external_links : prev.external_links,
                   }));
 
                   const images = s.images || [];

@@ -8,9 +8,15 @@ const rateLimit = require('express-rate-limit');
 
 /**
  * Skip rate limiting for bots (SEO crawlers, social media bots, etc.)
- * Checks BOTH user-agent AND the req.isBot flag for maximum compatibility
+ * Only skips on safe read-only methods (GET/HEAD) — bots should never
+ * be sending POST/PUT/DELETE requests, so those are always rate-limited.
+ * This prevents trivial bypass by spoofing a bot User-Agent on write endpoints.
  */
 function skipBots(req, _res) {
+  // Only skip rate limiting for safe, read-only methods
+  const safeMethod = req.method === 'GET' || req.method === 'HEAD';
+  if (!safeMethod) return false;
+
   // Priority 1: Use req.isBot flag (set by global middleware)
   if (req.isBot === true) {
     return true;
@@ -55,4 +61,39 @@ const contributeLimiter = rateLimit({
   },
 });
 
-module.exports = { apiLimiter, contributeLimiter };
+/**
+ * Strict rate limiter for admin login endpoint to prevent brute force attacks.
+ * Allows 5 login attempts per 15 minutes per IP.
+ * Note: Do NOT skip bots for login - bots should not be attempting login.
+ */
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per window
+  skip: () => false, // Never skip - always limit (even for bots)
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many login attempts. Please try again in 15 minutes.',
+  },
+});
+
+/**
+ * Rate limiter for external/public API access.
+ * Allows 100 requests per hour per IP.
+ * Applied to /api/species and /api/search for cross-origin requests.
+ * Includes standard rate-limit headers so consumers know their remaining quota.
+ */
+const publicApiLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 100, // 100 requests per hour per IP
+  skip: skipBots, // Still skip for search engine bots
+  standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'API rate limit exceeded. You are allowed 100 requests per hour. Please try again later.',
+  },
+});
+
+module.exports = { apiLimiter, contributeLimiter, loginLimiter, publicApiLimiter };

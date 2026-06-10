@@ -23,6 +23,15 @@ const EMPTY_FORM = {
 };
 
 export default function ContributePage() {
+  const siteOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const pageJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'WebPage',
+    name: 'Contribute Data - FFDB',
+    url: `${siteOrigin}/contribute`,
+    description: 'Contribute new species data to the Flora and Fauna Database of Bangladesh.',
+  };
+
   const [formData, setFormData] = useState({ ...EMPTY_FORM, taxonomy: { ...EMPTY_FORM.taxonomy } });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -64,8 +73,9 @@ export default function ContributePage() {
     return (
       <div className="page-enter container" id="contribute-page" style={{ paddingTop: '60px', paddingBottom: '80px' }}>
         <Helmet>
-          <title>Contribution Received | FFDB</title>
+          <title>Contribution Received - FFDB</title>
           <meta name="robots" content="noindex" />
+          <meta property="og:site_name" content="FFDB" />
         </Helmet>
         <div style={{
           maxWidth: '520px',
@@ -91,8 +101,20 @@ export default function ContributePage() {
   return (
     <div className="page-enter container" id="contribute-page" style={{ paddingTop: '40px', paddingBottom: '80px' }}>
       <Helmet>
-        <title>Contribute Data | FFDB</title>
+        <title>Contribute Data - FFDB</title>
         <meta name="description" content="Contribute new species data to the Flora and Fauna Database of Bangladesh. Submissions are reviewed by administrators before publishing." />
+        <meta property="og:title" content="Contribute Data - FFDB" />
+        <meta property="og:description" content="Help grow the Flora and Fauna Database of Bangladesh by submitting species data." />
+        <meta property="og:type" content="website" />
+        <meta property="og:url" content={`${siteOrigin}/contribute`} />
+        <meta property="og:site_name" content="FFDB" />
+        <meta property="og:image" content={`${siteOrigin}/og-fallback.png`} />
+        <meta property="og:image:alt" content="Flora and Fauna Database of Bangladesh" />
+        <meta name="twitter:card" content="summary" />
+        <meta name="twitter:title" content="Contribute Data - FFDB" />
+        <meta name="twitter:description" content="Help grow the Flora and Fauna Database of Bangladesh by submitting species data." />
+        <link rel="canonical" href={`${siteOrigin}/contribute`} />
+        <script type="application/ld+json">{JSON.stringify(pageJsonLd)}</script>
       </Helmet>
       <div style={{ maxWidth: '700px', margin: '0 auto' }}>
         <h1 style={{ fontSize: '32px', fontWeight: 800, marginBottom: '6px' }}>
@@ -201,11 +223,14 @@ export default function ContributePage() {
                 onChange={(e) => updateField('conservation_status', e.target.value)}
               >
                 <option value="">Not Sure / Unknown</option>
+                <option value="NE">NE — Not Evaluated</option>
+                <option value="DD">DD — Data Deficient</option>
                 <option value="LC">LC — Least Concern</option>
                 <option value="NT">NT — Near Threatened</option>
                 <option value="VU">VU — Vulnerable</option>
                 <option value="EN">EN — Endangered</option>
                 <option value="CR">CR — Critically Endangered</option>
+                <option value="RE">RE — Regionally Extinct</option>
                 <option value="EW">EW — Extinct in the Wild</option>
                 <option value="EX">EX — Extinct</option>
               </select>

@@ -9,6 +9,19 @@ export default function SearchPage() {
   const query = searchParams.get('q') || '';
   const page = parseInt(searchParams.get('page'), 10) || 1;
   const category = searchParams.get('category') || '';
+  const siteOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const canonicalUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}${window.location.pathname}${window.location.search}`
+    : `${siteOrigin}/search`;
+  const pageJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'WebPage',
+    name: query ? `Search: "${query}" - FFDB` : 'Search Species - FFDB',
+    url: canonicalUrl,
+    description: query
+      ? `Search results for ${query} in the Flora and Fauna Database of Bangladesh.`
+      : 'Search species in the Flora and Fauna Database of Bangladesh.',
+  };
 
   const [results, setResults] = useState([]);
   const [pagination, setPagination] = useState({});
@@ -52,9 +65,11 @@ export default function SearchPage() {
   return (
     <div className="page-enter container" id="search-page" style={{ paddingTop: '40px', paddingBottom: '60px' }}>
       <Helmet>
-        <title>{query ? `Search: "${query}"` : 'Search Species'} | FFDB</title>
+        <title>{query ? `Search: "${query}"` : 'Search Species'} - FFDB</title>
         <meta name="description" content={`Search results for ${query} in the Flora and Fauna Database of Bangladesh.`} />
         <meta name="robots" content="noindex, follow" />
+        <meta property="og:site_name" content="FFDB" />
+        <script type="application/ld+json">{JSON.stringify(pageJsonLd)}</script>
       </Helmet>
       <h1 style={{ fontSize: '28px', fontWeight: 800, marginBottom: '4px' }}>
         Search Results
@@ -87,8 +102,8 @@ export default function SearchPage() {
       ) : results.length > 0 ? (
         <>
           <div className="species-grid">
-            {results.map((sp) => (
-              <SpeciesCard key={sp.id} species={sp} />
+            {results.map((sp, i) => (
+              <SpeciesCard key={sp.id} species={sp} index={i} />
             ))}
           </div>
 

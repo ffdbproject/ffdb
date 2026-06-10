@@ -45,6 +45,7 @@ CREATE INDEX idx_species_category        ON species (category);
 CREATE INDEX idx_species_status          ON species (status);
 CREATE INDEX idx_species_conservation    ON species (conservation_status);
 CREATE INDEX idx_species_created_at      ON species (created_at DESC);
+CREATE INDEX idx_species_public_id       ON species (public_id) WHERE public_id IS NOT NULL;
 
 
 -- ============================================================

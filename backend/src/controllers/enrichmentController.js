@@ -8,33 +8,7 @@
 
 const { pool } = require('../config/db');
 const { enrichByScientificName } = require('../services/enrichmentService');
-
-/**
- * Normalize external image URLs to HTTPS for mobile compatibility.
- * Converts http:// URLs to https:// to avoid mixed-content blocking on mobile.
- * Safe external domains (GBIF, Wikipedia, known biodiversity databases) are whitelisted.
- */
-function normalizeImageUrl(url) {
-  if (!url || typeof url !== 'string') return url;
-  
-  // Known safe domains that support HTTPS
-  const safeDomainsHttpToHttps = [
-    'plantsp-eflora.bnh.gov.bd',
-    'www.gbif.org',
-    'gbif.org',
-    'upload.wikimedia.org',
-    'commons.wikimedia.org',
-  ];
-  
-  if (url.startsWith('http://')) {
-    const domain = new URL(url).hostname;
-    if (safeDomainsHttpToHttps.some(d => domain.includes(d))) {
-      return url.replace(/^http:\/\//, 'https://');
-    }
-  }
-  
-  return url;
-}
+const { normalizeImageUrl } = require('../utils/normalize');
 
 async function enrichSpeciesById(req, res, next) {
   let client;
@@ -126,6 +100,16 @@ async function enrichSpeciesById(req, res, next) {
       console.log(`[Enrich] Added ${limited.length} coordinates`);
     }
 
+    if (enriched.external_links && Object.keys(enriched.external_links).length > 0) {
+      // Get existing to merge
+      const existingLinksRes = await client.query('SELECT external_links FROM species WHERE id = $1', [id]);
+      const existingLinks = existingLinksRes.rows[0]?.external_links || {};
+      const newLinks = { ...existingLinks, ...enriched.external_links };
+      await client.query('UPDATE species SET external_links = $1 WHERE id = $2', [JSON.stringify(newLinks), id]);
+      updates.external_links_added = true;
+      console.log('[Enrich] Added external links');
+    }
+
     let imagesAdded = 0;
     if (Array.isArray(enriched.images) && enriched.images.length > 0) {
       const images = enriched.images.slice(0, 8);
@@ -151,6 +135,20 @@ async function enrichSpeciesById(req, res, next) {
               [id, normalizedUrl, img.image_credit || img.source || null, false]
             );
             imagesAdded += 1;
+          } else if (img.image_credit) {
+            await client.query(
+              `UPDATE images
+               SET image_credit = $1
+               WHERE id = $2
+                 AND (
+                   image_credit IS NULL
+                   OR image_credit = ''
+                   OR image_credit ILIKE '%Wikipedia Community%'
+                   OR image_credit ILIKE '%Wikimedia Foundation%'
+                   OR image_credit ILIKE '%Unknown author%'
+                 )`,
+              [img.image_credit, exists.rows[0].id]
+            );
           }
         } catch (imgErr) {
           console.error('[Enrich] Failed to insert image:', imgErr.message);
@@ -184,8 +182,11 @@ async function enrichSpeciesById(req, res, next) {
     res.status(500).json({
       success: false,
       message: 'Enrichment failed',
-      error: err.message,
-      details: process.env.NODE_ENV === 'production' ? undefined : err.stack,
+      // Only expose error details in development to prevent information leakage
+      ...(process.env.NODE_ENV !== 'production' && {
+        error: err.message,
+        details: err.stack,
+      }),
     });
   } finally {
     if (client) {

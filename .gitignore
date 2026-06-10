@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables (NEVER commit these)
+.env
+.env.local
+.env.production
+
+# Build output
+frontend/dist/
+frontend/dist.zip
+
+# Uploaded files (user content)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+
+# Archives & temp files
+*.zip
+*.tar.gz
+*.rar
+
+# Old backups
+backend/src.zip
+backend/src old stable.zip
+backend/tmp_*
+
+# Deployment-specific
+.htaccess
+FFDB_cPanel_Ready.zip
+Flora.zip
+prepare_deploy.js
+app.js
+
+# Gemini / AI artifacts
+.gemini/
+
+# Security audit files (internal)
+SECURITY_ANALYSIS.md
+SECURITY_AUDIT.md
+SECURITY_FIXES.js
+SECURITY_FIXES_COMPLETED.md
+
+# Migration guides (internal)
+MIGRATION_PUBLIC_ID_INSTRUCTIONS.md
+PUBLIC_ID_FIX_SUMMARY.md
+FIX_PUBLIC_ID_GUIDE.md
+DEPLOYMENT_READY_PUBLIC_ID.md
+
+# Temp HTML files
+species_gbot.html

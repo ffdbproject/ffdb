@@ -7,36 +7,13 @@
 // can read OG/Twitter/JSON-LD without executing JavaScript.
 // ============================================================
 
-const fs = require('fs/promises');
+const fsp = require('fs/promises');
 const path = require('path');
 const { pool } = require('../config/db');
-
-// Lightweight regex to detect common bots
-const BOT_USER_AGENTS = /bot|crawler|spider|crawling|facebookexternalhit|facebot|twitterbot|slackbot|linkedinbot|discordbot|applebot|whatsapp|telegrambot/i;
+const { getPublicOrigin } = require('../utils/origin');
 
 const INDEX_HTML_PATH = path.join(__dirname, '..', '..', '..', 'frontend', 'dist', 'index.html');
 let cachedIndexTemplate = null;
-
-function getPublicOrigin(req) {
-  const configuredOrigin = process.env.PUBLIC_SITE_URL || process.env.SITE_URL || '';
-  if (configuredOrigin) {
-    return configuredOrigin.replace(/\/$/, '');
-  }
-
-  const forwardedHost = (req.get('x-forwarded-host') || '').split(',')[0].trim();
-  const host = forwardedHost || req.get('host') || req.hostname;
-  if (!host) {
-    return process.env.NODE_ENV === 'production' ? 'https://localhost' : 'http://localhost:5173';
-  }
-
-  if (process.env.NODE_ENV === 'production') {
-    const forwardedProto = (req.get('x-forwarded-proto') || 'https').split(',')[0].trim();
-    const protocol = forwardedProto === 'http' ? 'http' : 'https';
-    return `${protocol}://${host}`;
-  }
-
-  return `${req.protocol}://${host}`;
-}
 
 function escapeHtml(value) {
   return String(value || '')
@@ -56,8 +33,12 @@ function resolvePublicImageUrl(imageUrl, domain) {
     return '';
   }
 
+  // For OG/Twitter meta tags, use the DIRECT image URL.
+  // Facebook/WhatsApp/Twitter scrapers can fetch from Wikipedia directly —
+  // the proxy is only needed for the in-app browser (referrer issues),
+  // not for metadata scraping.
   if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-    return `${domain}/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+    return imageUrl;
   }
 
   return imageUrl.startsWith('/') ? `${domain}${imageUrl}` : `${domain}/${imageUrl}`;
@@ -65,7 +46,7 @@ function resolvePublicImageUrl(imageUrl, domain) {
 
 async function getIndexTemplate() {
   if (cachedIndexTemplate) return cachedIndexTemplate;
-  cachedIndexTemplate = await fs.readFile(INDEX_HTML_PATH, 'utf8');
+  cachedIndexTemplate = await fsp.readFile(INDEX_HTML_PATH, 'utf8');
   return cachedIndexTemplate;
 }
 
@@ -78,6 +59,8 @@ function injectSpeciesMetaIntoHtml(templateHtml, meta) {
     imageUrl,
     fallbackImageUrl,
     displayName,
+    pageJsonLd,
+    organizationJsonLd,
     jsonLd,
     breadcrumbJsonLd,
   } = meta;
@@ -109,6 +92,8 @@ function injectSpeciesMetaIntoHtml(templateHtml, meta) {
     <meta name="twitter:image:width" content="1024">
     <meta name="twitter:image:height" content="512">
     <link rel="canonical" href="${safeCanonicalUrl}">
+    <script type="application/ld+json">${safeJsonLdString(pageJsonLd)}</script>
+    <script type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
     <script type="application/ld+json">${safeJsonLdString(jsonLd)}</script>
     <script type="application/ld+json">${safeJsonLdString(breadcrumbJsonLd)}</script>
   `.trim();
@@ -126,12 +111,54 @@ function injectSpeciesMetaIntoHtml(templateHtml, meta) {
   return withTitle.replace('</head>', `${injectedHead}\n</head>`);
 }
 
+function injectStaticPageMetaIntoHtml(templateHtml, meta) {
+  const {
+    pageTitle,
+    description,
+    canonicalUrl,
+    pageJsonLd,
+    organizationJsonLd,
+  } = meta;
+
+  const safePageTitle = escapeHtml(pageTitle);
+  const safeDescription = escapeHtml(description);
+  const safeCanonicalUrl = escapeHtml(canonicalUrl);
+
+  const injectedHead = `
+    <title>${safePageTitle}</title>
+    <meta name="description" content="${safeDescription}">
+    <meta property="og:title" content="${safePageTitle}">
+    <meta property="og:site_name" content="FFDB">
+    <meta property="og:description" content="${safeDescription}">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="${safeCanonicalUrl}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="${safePageTitle}">
+    <meta name="twitter:description" content="${safeDescription}">
+    <link rel="canonical" href="${safeCanonicalUrl}">
+    <script type="application/ld+json">${safeJsonLdString(pageJsonLd)}</script>
+    <script type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
+  `.trim();
+
+  const sanitized = templateHtml
+    .replace(/<meta[^>]+property=["']og:[^"']+["'][^>]*>\s*/gi, '')
+    .replace(/<meta[^>]+name=["']twitter:[^"']+["'][^>]*>\s*/gi, '')
+    .replace(/<meta[^>]+name=["']description["'][^>]*>\s*/gi, '')
+    .replace(/<link[^>]+rel=["']canonical["'][^>]*>\s*/gi, '')
+    .replace(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
+
+  const withTitle = sanitized.replace(/<title[^>]*>[\s\S]*?<\/title>/i, `<title>${safePageTitle}</title>`);
+  return withTitle.replace('</head>', `${injectedHead}\n</head>`);
+}
+
 async function prerenderMiddleware(req, res, next) {
   if (req.method !== 'GET' || process.env.NODE_ENV !== 'production') {
     return next();
   }
 
-  const speciesMatch = req.path.match(/^\/species\/(\d+)$/);
+  // Allow numeric IDs and also alphanumeric `public_id` values (no slashes),
+  // and accept an optional trailing slash.
+  const speciesMatch = req.path.match(/^\/species\/([^\/]+)\/?$/);
 
   // Always inject species metadata for /species/:id so OG/Twitter/Schema
   // validators work even when they do not execute JS or identify as bots.
@@ -149,21 +176,144 @@ async function prerenderMiddleware(req, res, next) {
     }
   }
 
-  // Keep homepage lightweight prerender for major bots only.
-  const userAgent = req.headers['user-agent'] || '';
-  const isBot = BOT_USER_AGENTS.test(userAgent);
-
-  if (isBot && (req.path === '/' || req.path === '/index.html' || req.path === '')) {
-    res.send(generateHomeHtml(req));
+  // Always prerender homepage so its source includes SEO metadata and JSON-LD.
+  if (req.path === '/' || req.path === '/index.html' || req.path === '') {
+    res.send(await generateHomeHtml(req));
     return;
+  }
+
+  const staticPageMeta = getStaticPageMeta(req);
+  if (staticPageMeta) {
+    try {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.send(await generateStaticPageHtml(req, staticPageMeta));
+      return;
+    } catch (err) {
+      console.error(`[Prerender] Failed to inject static page meta for ${req.path}:`, err.message);
+      return next();
+    }
   }
 
   next();
 }
 
+function getStaticPageMeta(req) {
+  const domain = getPublicOrigin(req);
+  const canonicalUrl = `${domain}${req.originalUrl || req.path}`;
+
+  if (req.path === '/species') {
+    return {
+      pageTitle: 'Browse Species - FFDB',
+      description: 'Browse the complete catalog of flora and fauna species in Bangladesh.',
+      canonicalUrl,
+      pageJsonLd: {
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: 'Browse Species - FFDB',
+        url: canonicalUrl,
+        description: 'Browse the complete catalog of flora and fauna species in Bangladesh.',
+      },
+      organizationJsonLd: {
+        '@context': 'https://schema.org',
+        '@type': 'Organization',
+        name: 'FFDB',
+        alternateName: 'Flora and Fauna Database of Bangladesh',
+        url: `${domain}/`,
+        logo: `${domain}/logo.png`,
+      },
+    };
+  }
+
+  if (req.path === '/search') {
+    const query = (req.query && req.query.q ? String(req.query.q).trim() : '');
+    return {
+      pageTitle: query ? `Search: "${query}" - FFDB` : 'Search Species - FFDB',
+      description: query
+        ? `Search results for ${query} in the Flora and Fauna Database of Bangladesh.`
+        : 'Search species in the Flora and Fauna Database of Bangladesh.',
+      canonicalUrl,
+      pageJsonLd: {
+        '@context': 'https://schema.org',
+        '@type': 'SearchResultsPage',
+        name: query ? `Search: "${query}" - FFDB` : 'Search Species - FFDB',
+        url: canonicalUrl,
+        description: query
+          ? `Search results for ${query} in the Flora and Fauna Database of Bangladesh.`
+          : 'Search species in the Flora and Fauna Database of Bangladesh.',
+      },
+      organizationJsonLd: {
+        '@context': 'https://schema.org',
+        '@type': 'Organization',
+        name: 'FFDB',
+        alternateName: 'Flora and Fauna Database of Bangladesh',
+        url: `${domain}/`,
+        logo: `${domain}/logo.png`,
+      },
+    };
+  }
+
+  const pageMap = {
+    '/about': {
+      title: 'About - FFDB',
+      description: 'Learn about Flora and Fauna Database of Bangladesh, our mission, vision, history, and conservation efforts.',
+    },
+    '/team': {
+      title: 'Team - FFDB',
+      description: 'Meet the FFDB team maintaining Bangladesh biodiversity data.',
+    },
+    '/contribute': {
+      title: 'Contribute Data - FFDB',
+      description: 'Contribute new species data to the Flora and Fauna Database of Bangladesh.',
+    },
+    '/report-problem': {
+      title: 'Report a Problem - FFDB',
+      description: 'Report any issues or problems you encounter on the Flora and Fauna Database of Bangladesh.',
+    },
+    '/api-docs': {
+      title: 'API Docs - FFDB',
+      description: 'Public API documentation for the Flora and Fauna Database of Bangladesh.',
+    },
+  };
+
+  const page = pageMap[req.path];
+  if (!page) return null;
+
+  return {
+    pageTitle: page.title,
+    description: page.description,
+    canonicalUrl,
+    pageJsonLd: {
+      '@context': 'https://schema.org',
+      '@type': 'WebPage',
+      name: page.title,
+      url: canonicalUrl,
+      description: page.description,
+    },
+    organizationJsonLd: {
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      name: 'FFDB',
+      alternateName: 'Flora and Fauna Database of Bangladesh',
+      url: `${domain}/`,
+      logo: `${domain}/logo.png`,
+    },
+  };
+}
+
+async function generateStaticPageHtml(req, meta) {
+  const template = await getIndexTemplate();
+  return injectStaticPageMetaIntoHtml(template, meta);
+}
+
 async function generateSpeciesHtml(id, req) {
+  // IMPORTANT: Public URLs use `public_id`, not the internal auto-increment `id`.
+  // This must match the speciesController logic which does:
+  //   WHERE s.public_id = $1 AND s.status = 'published'
   const result = await pool.query(
     `SELECT
+      s.public_id,
       s.scientific_name,
       s.english_name,
       s.bengali_name,
@@ -175,7 +325,7 @@ async function generateSpeciesHtml(id, req) {
     FROM species s
     LEFT JOIN taxonomy t ON t.species_id = s.id
     LEFT JOIN images i ON i.species_id = s.id AND i.is_primary = TRUE
-    WHERE s.id = $1 AND s.status = 'published'`,
+    WHERE s.public_id = $1 AND s.status = 'published'`,
     [id]
   );
 
@@ -189,16 +339,42 @@ async function generateSpeciesHtml(id, req) {
   const imageUrl = resolvePublicImageUrl(s.image_url, domain);
   const fallbackImageUrl = `${domain}/og-fallback.png`;
   const socialImageUrl = imageUrl || fallbackImageUrl;
-  const descriptionSnippet = s.description
-    ? s.description.substring(0, 160)
+  // Strip HTML tags from description (descriptions may contain <p>, <b>, etc.)
+  const plainDescription = s.description
+    ? s.description.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
+    : '';
+  const descriptionSnippet = plainDescription
+    ? plainDescription.substring(0, 160)
     : `Detailed information about ${displayName} (${s.scientific_name}) in Bangladesh.`;
+
+  const schemaName = (s.english_name && s.bengali_name)
+    ? `${s.english_name} (${s.bengali_name})`
+    : displayName;
+
+  const pageJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'WebPage',
+    name: schemaName,
+    headline: schemaName,
+    url: `${domain}/species/${id}`,
+    description: descriptionSnippet,
+  };
+
+  const organizationJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'FFDB',
+    alternateName: 'Flora and Fauna Database of Bangladesh',
+    url: `${domain}/`,
+    logo: `${domain}/logo.png`,
+  };
 
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'Taxon',
     name: s.scientific_name,
     alternateName: [s.english_name, s.bengali_name].filter(Boolean),
-    description: s.description,
+    description: plainDescription || undefined,
     image: socialImageUrl,
     url: `${domain}/species/${id}`,
     identifier: String(id),
@@ -249,7 +425,7 @@ async function generateSpeciesHtml(id, req) {
     ],
   };
 
-  const title = `${displayName} | FFDB`;
+  const title = `${displayName} - FFDB`;
   const socialTitle = displayName;
   const canonicalUrl = `${domain}/species/${id}`;
 
@@ -262,47 +438,109 @@ async function generateSpeciesHtml(id, req) {
     imageUrl: socialImageUrl,
     fallbackImageUrl,
     displayName,
+    pageJsonLd,
+    organizationJsonLd,
     jsonLd,
     breadcrumbJsonLd,
   });
 }
 
-function generateHomeHtml(req) {
+async function generateHomeHtml(req) {
   const domain = getPublicOrigin(req);
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="utf-8">
-      <title>Flora and Fauna Database of Bangladesh</title>
-      <meta name="description" content="Explore the rich biodiversity of Bangladesh. A centralized, authoritative database for researchers, students, and conservationists.">
-      <meta property="og:title" content="Flora and Fauna Database of Bangladesh">
-      <meta property="og:description" content="Explore the rich biodiversity of Bangladesh. A centralized, authoritative database for researchers, students, and conservationists.">
-      <meta property="og:type" content="website">
-      <meta property="og:url" content="${domain}/">
-      <meta property="og:image" content="${domain}/og-fallback.png">
-      <meta property="og:image:alt" content="Flora and Fauna Database of Bangladesh">
+  const websiteJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: 'FFDB',
+    alternateName: 'Flora and Fauna Database of Bangladesh',
+    url: `${domain}/`,
+    potentialAction: {
+      '@type': 'SearchAction',
+      target: `${domain}/search?q={search_term_string}`,
+      'query-input': 'required name=search_term_string',
+    },
+  };
+
+  const organizationJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: 'FFDB',
+    alternateName: 'Flora and Fauna Database of Bangladesh',
+    url: `${domain}/`,
+    logo: `${domain}/logo.png`,
+  };
+
+  const template = await getIndexTemplate();
+
+  return injectHomeMetaIntoHtml(
+    template,
+    {
+      title: 'Flora and Fauna Database of Bangladesh',
+      description: 'Explore the rich biodiversity of Bangladesh. A centralized, authoritative database for researchers, students, and conservationists.',
+      canonicalUrl: `${domain}/`,
+      socialTitle: 'Flora and Fauna Database of Bangladesh',
+      socialDescription: 'Explore the rich biodiversity of Bangladesh. A centralized, authoritative database for researchers, students, and conservationists.',
+      imageUrl: `${domain}/og-fallback.png`,
+      displayName: 'Flora and Fauna Database of Bangladesh',
+      websiteJsonLd,
+      organizationJsonLd,
+    }
+  );
+}
+
+function injectHomeMetaIntoHtml(templateHtml, meta) {
+  const {
+    title,
+    description,
+    canonicalUrl,
+    socialTitle,
+    socialDescription,
+    imageUrl,
+    displayName,
+    websiteJsonLd,
+    organizationJsonLd,
+  } = meta;
+
+  const safeTitle = escapeHtml(title);
+  const safeDescription = escapeHtml(description);
+  const safeCanonicalUrl = escapeHtml(canonicalUrl);
+  const safeSocialTitle = escapeHtml(socialTitle || title);
+  const safeSocialDescription = escapeHtml(socialDescription || description);
+  const safeImageUrl = escapeHtml(imageUrl || '');
+  const safeDisplayName = escapeHtml(displayName || title);
+
+  const injectedHead = `
+    <title>${safeTitle}</title>
+    <meta name="description" content="${safeDescription}">
+    <meta property="og:title" content="${safeSocialTitle}">
+    <meta property="og:site_name" content="FFDB">
+    <meta property="og:description" content="${safeSocialDescription}">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="${safeCanonicalUrl}">
+    <meta property="og:image" content="${safeImageUrl}">
+    <meta property="og:image:alt" content="${safeDisplayName}">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Flora and Fauna Database of Bangladesh">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:image" content="${domain}/og-fallback.png">
-    <meta name="twitter:image:alt" content="Flora and Fauna Database of Bangladesh">
+    <meta name="twitter:title" content="${safeSocialTitle}">
+    <meta name="twitter:description" content="${safeSocialDescription}">
+    <meta name="twitter:image" content="${safeImageUrl}">
+    <meta name="twitter:image:alt" content="${safeDisplayName}">
     <meta name="twitter:image:width" content="1024">
     <meta name="twitter:image:height" content="512">
-      <meta name="twitter:title" content="Flora and Fauna Database of Bangladesh">
-      <meta name="twitter:description" content="Explore the rich biodiversity of Bangladesh. A centralized, authoritative database for researchers, students, and conservationists.">
-      <meta name="twitter:image" content="${domain}/og-fallback.png">
-      <meta name="twitter:image:alt" content="Flora and Fauna Database of Bangladesh">
-      <link rel="canonical" href="${domain}/">
-    </head>
-    <body>
-      <h1>Flora and Fauna Database of Bangladesh (FFDB)</h1>
-      <p>Explore the rich biodiversity of Bangladesh. A centralized, authoritative database for researchers, students, and conservationists.</p>
-    </body>
-    </html>
-  `;
+    <link rel="canonical" href="${safeCanonicalUrl}">
+    <script type="application/ld+json">${safeJsonLdString(websiteJsonLd)}</script>
+    <script type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
+  `.trim();
+
+  const sanitized = templateHtml
+    .replace(/<meta[^>]+property=["']og:[^"']+["'][^>]*>\s*/gi, '')
+    .replace(/<meta[^>]+name=["']twitter:[^"']+["'][^>]*>\s*/gi, '')
+    .replace(/<meta[^>]+name=["']description["'][^>]*>\s*/gi, '')
+    .replace(/<link[^>]+rel=["']canonical["'][^>]*>\s*/gi, '')
+    .replace(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
+
+  const withTitle = sanitized.replace(/<title[^>]*>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`);
+  return withTitle.replace('</head>', `${injectedHead}\n</head>`);
 }
 
 module.exports = prerenderMiddleware;

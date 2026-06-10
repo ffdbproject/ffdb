@@ -4,44 +4,10 @@
 // ============================================================
 
 const { pool } = require('../config/db');
+const { isAdminAuthorized } = require('../utils/auth');
+const { normalizeOptionalString } = require('../utils/normalize');
 
 const VALID_STATUSES = ['open', 'in_progress', 'resolved'];
-
-function isAdminAuthorized(req) {
-  const apiKey = process.env.ADMIN_API_KEY;
-
-  // 1) If Authorization: Bearer <API_KEY> header is present and matches, allow
-  const authHeader = req.headers.authorization || '';
-  if (authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    if (apiKey && token === apiKey) return true;
-  }
-
-  // 2) If an HttpOnly admin cookie is present, verify the JWT
-  try {
-    const jwt = require('jsonwebtoken');
-    const token = req.cookies?.admin_token;
-    if (token) {
-      const secret = process.env.JWT_SECRET || process.env.ADMIN_API_KEY || 'fallback_secret_for_dev';
-      const decoded = jwt.verify(token, secret);
-      if (decoded && decoded.role === 'admin') return true;
-    }
-  } catch (e) {
-    // ignore verification errors and fall through
-  }
-
-  // 3) Development mode fallback when no ADMIN_API_KEY configured
-  if (!apiKey && process.env.NODE_ENV !== 'production') return true;
-
-  return false;
-}
-
-function normalizeOptionalString(value, maxLen) {
-  if (value === undefined || value === null) return null;
-  const normalized = String(value).trim();
-  if (!normalized) return null;
-  return normalized.slice(0, maxLen);
-}
 
 /**
  * POST /api/reports

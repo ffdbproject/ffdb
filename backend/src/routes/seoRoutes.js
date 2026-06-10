@@ -6,36 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/db');
-
-function getPublicOrigin(req) {
-  // Priority 1: Explicit env var
-  const configuredOrigin = process.env.PUBLIC_SITE_URL || process.env.SITE_URL || '';
-  if (configuredOrigin) {
-    return configuredOrigin.replace(/\/$/, '');
-  }
-
-  // Priority 2: x-forwarded-host header (from reverse proxy)
-  const forwardedHost = (req.get('x-forwarded-host') || '').split(',')[0].trim();
-  
-  // Priority 3: Host header
-  const host = forwardedHost || req.get('host') || req.hostname;
-  if (!host) {
-    const fallback = process.env.NODE_ENV === 'production' ? 'https://localhost' : 'http://localhost:5173';
-    console.warn('[SEO] Unable to detect domain. Using fallback:', fallback);
-    return fallback;
-  }
-
-  // Priority 4: Detect protocol
-  if (process.env.NODE_ENV === 'production') {
-    const forwardedProto = (req.get('x-forwarded-proto') || 'https').split(',')[0].trim();
-    const protocol = forwardedProto === 'http' ? 'http' : 'https';
-    const url = `${protocol}://${host}`;
-    console.log('[SEO] Detected domain:', url);
-    return url;
-  }
-
-  return `${req.protocol}://${host}`;
-}
+const { getPublicOrigin } = require('../utils/origin');
 
 /**
  * GET /sitemap.xml
@@ -48,51 +19,65 @@ router.get('/sitemap.xml', async (req, res, next) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+    res.header('Content-Type', 'application/xml');
 
-    // Fetch all published species IDs and update times
-    const result = await pool.query(`
-      SELECT id, updated_at 
-      FROM species 
-      WHERE status = 'published' 
-      ORDER BY updated_at DESC
-    `);
+    // Stream XML to avoid loading all species into a single string
+    res.write('<?xml version="1.0" encoding="UTF-8"?>\n');
+    res.write('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n');
 
-    // Static routes
+    // Static routes with lastmod for better crawl scheduling
+    const today = new Date().toISOString().split('T')[0];
     const staticUrls = [
-      { url: '/', priority: 1.0 },
-      { url: '/species', priority: 0.8 },
+      { url: '/', priority: 1.0, lastmod: today },
+      { url: '/species', priority: 0.8, lastmod: today },
       { url: '/contribute', priority: 0.5 },
+      { url: '/about', priority: 0.4 },
+      { url: '/team', priority: 0.3 },
+      { url: '/api-docs', priority: 0.3 },
     ];
 
-    // Build the XML string
-    let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    xml += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
-
-    // Add static URLs
     for (const item of staticUrls) {
-      xml += `  <url>
-    <loc>${domain}${item.url}</loc>
+      res.write(`  <url>
+    <loc>${domain}${item.url}</loc>${item.lastmod ? `
+    <lastmod>${item.lastmod}</lastmod>` : ''}
     <changefreq>weekly</changefreq>
     <priority>${item.priority}</priority>
-  </url>\n`;
+  </url>\n`);
     }
 
-    // Add species URLs
-    for (const row of result.rows) {
-      xml += `  <url>
+    // Stream species URLs in batches to limit peak memory
+    const BATCH_SIZE = 500;
+    let offset = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const result = await pool.query(
+        `SELECT id, updated_at FROM species WHERE status = 'published' ORDER BY updated_at DESC LIMIT $1 OFFSET $2`,
+        [BATCH_SIZE, offset]
+      );
+
+      for (const row of result.rows) {
+        res.write(`  <url>
     <loc>${domain}/species/${row.id}</loc>
     <lastmod>${new Date(row.updated_at).toISOString().split('T')[0]}</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
-  </url>\n`;
+  </url>\n`);
+      }
+
+      hasMore = result.rows.length === BATCH_SIZE;
+      offset += BATCH_SIZE;
     }
 
-    xml += '</urlset>';
-
-    res.header('Content-Type', 'application/xml');
-    res.send(xml);
+    res.write('</urlset>');
+    res.end();
   } catch (err) {
-    next(err);
+    if (!res.headersSent) {
+      next(err);
+    } else {
+      res.end();
+      console.error('[SEO] Sitemap streaming error:', err.message);
+    }
   }
 });
 
@@ -116,7 +101,9 @@ router.get('/robots.txt', (req, res) => {
   txt += 'User-agent: Googlebot\n';
   txt += 'Allow: /\n\n';
   txt += 'User-agent: *\n';
-  txt += 'Allow: /\n\n';
+  txt += 'Allow: /\n';
+  txt += 'Disallow: /admin\n';
+  txt += 'Disallow: /api/\n\n';
   txt += `Sitemap: ${domain}/sitemap.xml\n`;
 
   res.header('Content-Type', 'text/plain');
@@ -137,27 +124,17 @@ router.get('/api/seo/checklist', async (req, res, next) => {
 
     const publishedCount = publishedResult.rows[0]?.published_count || 0;
 
+    // Only expose safe, non-sensitive information
     const checks = {
-      environment: process.env.NODE_ENV || 'development',
-      domain,
       hasSitemapRoute: true,
       hasRobotsRoute: true,
       publishedSpeciesCount: publishedCount,
-      indexability: {
-        robotsDisallowAdmin: true,
-        robotsDisallowApi: true,
-        robotsDisallowSearch: true,
-      },
     };
 
     const warnings = [];
 
     if (publishedCount === 0) {
       warnings.push('No published species found. Sitemap will contain only static pages.');
-    }
-
-    if (process.env.NODE_ENV !== 'production') {
-      warnings.push('Running outside production. Use production checks before final SEO validation.');
     }
 
     res.json({

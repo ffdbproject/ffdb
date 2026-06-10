@@ -15,11 +15,12 @@ const {
 	deleteTeamMember,
 } = require('../controllers/teamController');
 const { login, logout, getMe } = require('../controllers/adminController');
+const { exportDatabase, importDatabase } = require('../controllers/databaseController');
 const { adminAuth } = require('../middleware/adminAuth');
-const { csrfProtection } = require('../middleware/csrfProtection');
+const { loginLimiter } = require('../middleware/rateLimiter');
 
 // --- Auth Routes ---
-router.post('/login', login);
+router.post('/login', loginLimiter, login);
 router.post('/logout', logout);
 router.get('/me', adminAuth, getMe);
 
@@ -32,13 +33,17 @@ router.get('/gbif/search', adminAuth, searchGBIF);
 router.get('/gbif/species/:gbifKey', adminAuth, getGBIFSpecies);
 
 // POST /api/admin/enrich/:id  — Enrich species data (Wikipedia → GBIF)
-router.post('/enrich/:id', csrfProtection, adminAuth, enrichSpeciesById);
+router.post('/enrich/:id', adminAuth, enrichSpeciesById);
+
+// --- Database Import/Export ---
+router.get('/database/export', adminAuth, exportDatabase);
+router.post('/database/import', adminAuth, importDatabase);
 
 // --- Team Management ---
 router.get('/team', adminAuth, getAdminTeam);
-router.post('/team', csrfProtection, adminAuth, createTeamMember);
-router.put('/team/:id', csrfProtection, adminAuth, updateTeamMember);
-router.delete('/team/:id', csrfProtection, adminAuth, deleteTeamMember);
-router.post('/team/:id/delete', csrfProtection, adminAuth, deleteTeamMember);
+router.post('/team', adminAuth, createTeamMember);
+router.put('/team/:id', adminAuth, updateTeamMember);
+router.delete('/team/:id', adminAuth, deleteTeamMember);
+router.post('/team/:id/delete', adminAuth, deleteTeamMember);
 
 module.exports = router;

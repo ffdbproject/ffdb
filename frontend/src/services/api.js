@@ -6,13 +6,37 @@
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 const ASSET_BASE = import.meta.env.VITE_ASSET_URL || '';
 
-export function resolveAssetUrl(path) {
+export function resolveAssetUrl(path, name) {
   if (!path) return '';
   if (path.startsWith('data:') || path.startsWith('blob:')) return path;
 
   if (path.startsWith('http://') || path.startsWith('https://')) {
     const proxyBase = API_BASE.replace(/\/$/, '');
-    return `${proxyBase}/image-proxy?url=${encodeURIComponent(path)}`;
+
+    // If a name is provided, sanitize and include it as a path segment so
+    // browsers use it as the default filename when saving images.
+    if (name && name.trim()) {
+      const safe = String(name).trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80);
+
+      // Try to preserve extension from the original URL path when possible
+      let ext = '';
+      try {
+        const parsed = new URL(path);
+        const match = parsed.pathname.match(/\.(jpg|jpeg|png|webp|gif|svg|avif)$/i);
+        if (match) ext = `.${match[1].toLowerCase()}`;
+      } catch { /* ignore parsing errors */ }
+
+      const fileSegment = encodeURIComponent(`${safe}${ext}`);
+      return `${proxyBase}/image-proxy/${fileSegment}?url=${encodeURIComponent(path)}`;
+    }
+
+    // Fallback: no name provided — use query param as before
+    let proxyUrl = `${proxyBase}/image-proxy?url=${encodeURIComponent(path)}`;
+    return proxyUrl;
   }
 
   return `${ASSET_BASE}${path}`;
@@ -23,6 +47,7 @@ export function resolveAssetUrl(path) {
  */
 async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
+  const silentError = options.silentError || false; // Don't log error if true
   
   const config = {
     headers: {
@@ -48,7 +73,9 @@ async function request(endpoint, options = {}) {
 
     return data;
   } catch (err) {
-    console.error(`[API] ${options.method || 'GET'} ${endpoint} failed:`, err.message);
+    if (!silentError) {
+      console.error(`[API] ${options.method || 'GET'} ${endpoint} failed:`, err.message);
+    }
     throw err;
   }
 }
@@ -68,7 +95,8 @@ export const authAPI = {
     return request('/admin/logout', { method: 'POST' });
   },
   checkAuth() {
-    return request('/admin/me');
+    // Silent error: 401 is expected for non-authenticated users
+    return request('/admin/me', { silentError: true });
   },
 };
 
@@ -79,7 +107,7 @@ export const authAPI = {
 export const speciesAPI = {
   /**
    * Get paginated species list.
-  * @param {Object} params - { page, limit, category, status, origin }
+   * @param {Object} params - { page, limit, category, status, origin }
    */
   getAll(params = {}) {
     const query = new URLSearchParams(params).toString();
@@ -176,14 +204,14 @@ export const searchAPI = {
    */
   search(q, params = {}) {
     const query = new URLSearchParams({ q, ...params }).toString();
-    return request(`/search?${query}`);
+    return request(`/search?${query}`, { credentials: 'omit' });
   },
 
   /**
    * Autocomplete suggestions for search bar.
    */
   suggest(q) {
-    return request(`/search/suggest?q=${encodeURIComponent(q)}`);
+    return request(`/search/suggest?q=${encodeURIComponent(q)}`, { credentials: 'omit' });
   },
 };
 
@@ -213,7 +241,7 @@ export const gbifAPI = {
 
 export const teamAPI = {
   getPublic() {
-    return request('/team');
+    return request('/team', { credentials: 'omit' });
   },
   getAdmin() {
     return request('/admin/team');
@@ -236,3 +264,20 @@ export const teamAPI = {
     });
   },
 };
+
+// ============================================================
+// DATABASE API (Admin)
+// ============================================================
+
+export const databaseAPI = {
+  export() {
+    return request('/admin/database/export');
+  },
+  import(data) {
+    return request('/admin/database/import', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+};
+

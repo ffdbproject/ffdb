@@ -1,6 +1,6 @@
 <div align="center">
 
-# FFDB — Flora and Fauna Database of Bangladesh
+# Flora and Fauna Database of Bangladesh (FFDB)
 
 **A comprehensive, open-source biodiversity database for Bangladesh.**
 

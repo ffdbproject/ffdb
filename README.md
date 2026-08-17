@@ -140,6 +140,13 @@ DB_NAME=ffdb
 
 CORS_ORIGIN=http://localhost:5173
 ADMIN_API_KEY=your_secret_admin_key
+CONTRIBUTOR_API_KEY=optional_secret_contributor_key
+
+SMTP_HOST=mail.yourdomain.com
+SMTP_PORT=465
+SMTP_USER=noreply@yourdomain.com
+SMTP_PASS=your_email_password
+SMTP_SECURE=true
 ```
 
 ### 4. Install Dependencies
@@ -183,6 +190,13 @@ The admin panel is available at `/admin`. Authentication uses a secure API key s
 - **Team Manager** — Manage team member profiles shown on the public Team page
 - **Reports** — View and manage user-submitted problem reports
 - **Database Backup** — Export and import the entire database as JSON
+
+### Contributor Access
+
+You can also set a `CONTRIBUTOR_API_KEY` in your `.env`. Users logging in with this key have limited access:
+- They can only view and edit their **own** draft species submissions.
+- They cannot publish or delete species directly.
+- They can submit drafts for admin review.
 
 ---
 

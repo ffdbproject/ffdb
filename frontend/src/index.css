@@ -1,6 +1,0 @@
-/* FFDB - Flora and Fauna Database of Bangladesh */
-/* Global styles entry point */
-
-@import './styles/tokens.css';
-@import './styles/base.css';
-@import './styles/components.css';

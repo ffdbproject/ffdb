@@ -168,7 +168,9 @@ function ReportProblemPage() {
                       placeholder="e.g., 123"
                       min="1"
                     />
-                    <small className="form-hint">Enter the Species ID if the problem is related to a specific species</small>
+                    <small className="form-hint">
+                      Enter the Species ID if the problem is related to a specific species. You can find the ID at the end of the species page URL (e.g., in <code>ffdb.bd/species/18</code>, the ID is <strong>18</strong>).
+                    </small>
                   </div>
 
                   <div className="form-group">

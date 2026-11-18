@@ -4,6 +4,23 @@ import SafeImage from './SafeImage';
 /**
  * Reusable species card component.
  * Used in species grid listings on Homepage, Browse, and Search pages.
+ *
+ * Card images are loaded DIRECTLY (no backend proxy) because:
+ *  - The grid may show 8–12+ images simultaneously on shared hosting.
+ *  - The backend proxy only has one Node process and cannot handle a burst
+ *    of parallel image fetches without choking the server.
+ *  - Direct loading with referrerPolicy="no-referrer" handles the two most
+ *    common failure modes (Wikimedia hotlink protection, Safari ITP) without
+ *    any server involvement.
+ *
+ * URL resolution strategy (in priority order):
+ *  1. Local /uploads/   → serve directly (always works, same-origin).
+ *  2. Wikimedia         → rewrite to official 330px thumbnail URL (HTTPS,
+ *                         no referrer required, CORS-permissive).
+ *  3. Any other https   → pass the URL directly with no-referrer. Most CDN
+ *                         sources (iNaturalist S3, Flickr, etc.) do not check
+ *                         referrers and load fine. If a source blocks it the
+ *                         placeholder is shown — better than a proxy timeout.
  */
 export default function SpeciesCard({ species, index = 0 }) {
   const location = useLocation();
@@ -22,7 +39,9 @@ export default function SpeciesCard({ species, index = 0 }) {
   const displayName = english_name || bengali_name || scientific_name;
   const statusClass = (conservation_status || '').toLowerCase();
 
-  const publicId = species.public_id || id;
+  const speciesPath = species.status === 'published'
+    ? `/species/${species.public_id || id}`
+    : `/species/preview/${id}`;
 
   const handleCardClick = () => {
     try {
@@ -36,30 +55,52 @@ export default function SpeciesCard({ species, index = 0 }) {
 
   return (
     <Link
-      to={`/species/${publicId}`}
+      to={speciesPath}
       className="species-card"
-      id={`species-card-${publicId}`}
+      id={`species-card-${species.public_id || id}`}
       onClick={handleCardClick}
     >
       <div className="species-card-img-wrap">
         {primary_image ? (
           <SafeImage
-            src={primary_image_thumbnail || (() => {
+            src={(() => {
+              let srcUrl = primary_image_thumbnail || primary_image;
+              if (!srcUrl) return null;
               try {
-                if (primary_image && primary_image.startsWith('/uploads/')) {
-                  const parts = primary_image.split('/');
-                  const name = parts[parts.length - 1];
-                  return `/uploads/${name.replace(/(\.[^.]+)$/, '-sm$1')}`;
+                // 1. Local upload — serve directly, same-origin, always works.
+                if (srcUrl.startsWith('/uploads/')) {
+                  return srcUrl;
                 }
+
+                // 2. Wikimedia — rewrite to official thumbnail URL.
+                //    330px is on Wikimedia's allowlist; 400px is rejected.
+                //    HTTPS is required; no referrer check at this size.
+                if (srcUrl.includes('wikimedia.org')) {
+                  const cleanUrl = srcUrl.split('?')[0].replace('http://', 'https://');
+                  if (cleanUrl.includes('/thumb/')) return cleanUrl;
+
+                  const match = cleanUrl.match(
+                    /^https:\/\/upload\.wikimedia\.org\/wikipedia\/([^/]+)\/([a-f0-9]\/[a-f0-9]{2})\/([^/]+)$/i
+                  );
+                  if (match) {
+                    const [, project, path, filename] = match;
+                    return `https://upload.wikimedia.org/wikipedia/${project}/thumb/${path}/${filename}/330px-${filename}`;
+                  }
+                  return cleanUrl;
+                }
+
+                // 3. All other external images — load directly.
+                //    SafeImage sends referrerPolicy="no-referrer" which bypasses
+                //    most hotlink-protection checks. No proxy = no server load.
+                return srcUrl.replace(/^http:\/\//, 'https://');
               } catch {}
-              return primary_image;
+              return srcUrl;
             })()}
             imageName={scientific_name}
             skipProxy
             alt={`Photo of ${displayName}`}
             className="species-card-image"
             loading={index < 2 ? 'eager' : 'lazy'}
-            referrerPolicy="no-referrer"
           />
         ) : (
           <div className="species-card-placeholder">

@@ -9,7 +9,18 @@ import { resolveAssetUrl } from '../services/api';
  * Props:
  *   - imageName: optional species name for proxy filename (e.g. "Panthera tigris")
  *   - skipProxy: if true, load directly from the original URL (no proxy).
- *                Useful for list/card views where speed > proxy benefits.
+ *                Used by card grids where the backend proxy would be overwhelmed.
+ *
+ * Safari / privacy-browser compatibility:
+ *   - referrerPolicy always defaults to "no-referrer" for external images.
+ *     Wikimedia and many CDNs use referrer-based hotlink protection; sending
+ *     no referrer bypasses the check without needing any server involvement.
+ *
+ * NOTE: We intentionally do NOT set crossOrigin="anonymous" by default.
+ *   That attribute triggers a CORS preflight. If the image server does not
+ *   send Access-Control-Allow-Origin headers the browser blocks the image
+ *   entirely — which is worse than a broken-image icon. Only set crossOrigin
+ *   explicitly on images you know are served with CORS headers (e.g. /uploads/).
  */
 const SafeImage = forwardRef(function SafeImage({
   src,
@@ -28,9 +39,18 @@ const SafeImage = forwardRef(function SafeImage({
   const proxySrc = useMemo(() => resolveAssetUrl(src, imageName), [src, imageName]);
   const directSrc = useMemo(() => fallbackAltSrc || src || '', [fallbackAltSrc, src]);
 
-  // When skipProxy is true, go straight to direct URL with no-referrer
+  // Default to no-referrer for external images.
+  // Most broken-image issues in Safari and privacy browsers are caused by
+  // the browser sending the ffdb.bd origin as a referrer to Wikimedia/iNaturalist,
+  // which then blocks the request. Omitting the referrer header fixes this.
+  const isExternal = (url) => url && (url.startsWith('http://') || url.startsWith('https://'));
+  const resolvePolicy = (url) => {
+    if (referrerPolicy) return referrerPolicy; // caller-supplied always wins
+    return isExternal(url) ? 'no-referrer' : '';
+  };
+
   const initialSrc = skipProxy ? directSrc : proxySrc;
-  const initialPolicy = skipProxy ? 'no-referrer' : (referrerPolicy || '');
+  const initialPolicy = resolvePolicy(initialSrc);
 
   const [currentSrc, setCurrentSrc] = useState(initialSrc);
   const [currentReferrerPolicy, setCurrentReferrerPolicy] = useState(initialPolicy);
@@ -40,9 +60,8 @@ const SafeImage = forwardRef(function SafeImage({
   useEffect(() => {
     failedRef.current = false;
     const newSrc = skipProxy ? directSrc : proxySrc;
-    const newPolicy = skipProxy ? 'no-referrer' : (referrerPolicy || '');
     setCurrentSrc(newSrc);
-    setCurrentReferrerPolicy(newPolicy);
+    setCurrentReferrerPolicy(resolvePolicy(newSrc));
   }, [proxySrc, directSrc, referrerPolicy, skipProxy]);
 
   if (!src) return null;

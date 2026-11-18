@@ -40,6 +40,14 @@ export default function Footer() {
         <p>
           © {new Date().getFullYear()} Flora and Fauna Database of Bangladesh (FFDB).
         </p>
+        <p style={{ fontSize: '11px', marginTop: '12px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+          <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="license noopener noreferrer">
+            <img alt="Creative Commons License" style={{ borderWidth: 0, width: '80px' }} src="https://i.creativecommons.org/l/by/4.0/88x31.png" />
+          </a>
+          <span style={{ textAlign: 'center', maxWidth: '600px', lineHeight: '1.4' }}>
+            Except where otherwise noted, content on this site is licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="license noopener noreferrer" style={{ color: 'inherit', textDecoration: 'underline' }}>CC BY 4.0</a>.
+          </span>
+        </p>
       </div>
     </footer>
   );

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { speciesAPI } from '../services/api';
+import { speciesAPI, authAPI } from '../services/api';
 import { preloadRoute } from '../utils/routePreload';
+import ThemeToggle from '../components/ThemeToggle';
 
 const EMPTY_FORM = {
   scientific_name: '',
@@ -11,6 +12,9 @@ const EMPTY_FORM = {
   category: 'flora',
   origin: 'native',
   conservation_status: '',
+  conservation_status_year: '',
+  bd_conservation_status: '',
+  bd_conservation_status_year: '',
   residency_status: 'resident',
   description: '',
   habitat: '',
@@ -29,6 +33,8 @@ const EMPTY_FORM = {
     order: '',
     family: '',
     genus: '',
+    taxonomic_authority: '',
+    authority_year: '',
   },
 };
 
@@ -42,6 +48,38 @@ export default function AddSpeciesPage() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState(null);
   const [coordsText, setCoordsText] = useState('');
+  const [userRole, setUserRole] = useState(null);
+  const [nameExists, setNameExists] = useState(false);
+  const [checkingName, setCheckingName] = useState(false);
+
+  useEffect(() => {
+    const name = formData.scientific_name.trim();
+    if (!name) {
+      setNameExists(false);
+      setCheckingName(false);
+      return;
+    }
+
+    setCheckingName(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await speciesAPI.checkName(name);
+        setNameExists(res.exists);
+      } catch {
+        setNameExists(false);
+      } finally {
+        setCheckingName(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [formData.scientific_name]);
+
+  useEffect(() => {
+    authAPI.checkAuth()
+      .then((data) => setUserRole(data.user?.role || 'admin'))
+      .catch(() => {});
+  }, []);
 
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
@@ -106,6 +144,9 @@ export default function AddSpeciesPage() {
         category: data.category || prev.category,
         origin: data.origin || prev.origin,
         conservation_status: data.conservation_status || prev.conservation_status,
+        conservation_status_year: data.conservation_status_year || prev.conservation_status_year,
+        bd_conservation_status: data.bd_conservation_status || prev.bd_conservation_status,
+        bd_conservation_status_year: data.bd_conservation_status_year || prev.bd_conservation_status_year,
         residency_status: data.residency_status || prev.residency_status,
         description: data.description || prev.description,
         habitat: data.habitat || prev.habitat,
@@ -123,6 +164,8 @@ export default function AddSpeciesPage() {
           order: data.taxonomy?.order || prev.taxonomy.order,
           family: data.taxonomy?.family || prev.taxonomy.family,
           genus: data.taxonomy?.genus || prev.taxonomy.genus,
+          taxonomic_authority: data.taxonomy?.taxonomic_authority || prev.taxonomy.taxonomic_authority,
+          authority_year: data.taxonomy?.authority_year || prev.taxonomy.authority_year,
         },
         location_coordinates: data.location_coordinates || prev.location_coordinates,
       }));
@@ -176,6 +219,9 @@ export default function AddSpeciesPage() {
         category: formData.category,
         origin: formData.origin,
         conservation_status: formData.conservation_status,
+        conservation_status_year: formData.conservation_status_year || null,
+        bd_conservation_status: formData.bd_conservation_status || null,
+        bd_conservation_status_year: formData.bd_conservation_status_year || null,
         residency_status: formData.residency_status,
         description: formData.description,
         habitat: formData.habitat,
@@ -259,13 +305,19 @@ export default function AddSpeciesPage() {
           <h1 style={{ fontSize: '20px', fontWeight: 800, marginRight: '28px', letterSpacing: '-0.3px' }}>
             <span style={{ color: 'var(--accent-primary)' }}>FFDB</span> Admin
           </h1>
-          {[
-            { id: 'dashboard', label: 'Dashboard' },
-            { id: 'species', label: 'Manage Species' },
-            { id: 'reports', label: 'Reports' },
-            { id: 'team', label: 'Team' },
-            { id: 'gbif', label: 'Import from GBIF' },
-          ].map((t) => (
+          {(userRole === 'admin'
+            ? [
+                { id: 'dashboard', label: 'Dashboard' },
+                { id: 'species', label: 'Manage Species' },
+                { id: 'reports', label: 'Reports' },
+                { id: 'team', label: 'Team' },
+                { id: 'notice', label: 'Site Notice' },
+                { id: 'gbif', label: 'Import from GBIF' },
+              ]
+            : userRole === 'contributor'
+              ? [{ id: 'species', label: 'My Submissions' }]
+              : []
+          ).map((t) => (
             <button
               key={t.id}
               onClick={() => navigate(`/admin${t.id !== 'dashboard' ? `?tab=${t.id}` : ''}`)}
@@ -287,6 +339,22 @@ export default function AddSpeciesPage() {
               {t.label}
             </button>
           ))}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{
+              display: 'inline-block',
+              padding: '3px 10px',
+              borderRadius: '12px',
+              fontSize: '11px',
+              fontWeight: 600,
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase',
+              background: userRole === 'admin' ? 'rgba(45, 138, 78, 0.12)' : 'rgba(59, 130, 246, 0.12)',
+              color: userRole === 'admin' ? '#2d8a4e' : '#3b82f6',
+            }}>
+              {userRole === 'admin' ? 'Admin' : 'Contributor'}
+            </span>
+            <ThemeToggle />
+          </div>
         </div>
       </div>
 
@@ -376,8 +444,19 @@ export default function AddSpeciesPage() {
               value={formData.scientific_name}
               onChange={(e) => updateField('scientific_name', e.target.value)}
               placeholder="e.g. Panthera tigris"
-              style={{ fontStyle: 'italic' }}
+              style={{ fontStyle: 'italic', borderColor: nameExists ? '#dc3545' : undefined }}
             />
+            {checkingName && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>Checking availability...</div>}
+            {nameExists && !checkingName && (
+              <div style={{ fontSize: '12px', color: '#dc3545', marginTop: '4px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                This scientific name already exists in the database.
+              </div>
+            )}
           </div>
 
           <div className="form-row">
@@ -428,8 +507,24 @@ export default function AddSpeciesPage() {
                 <option value="exotic">Exotic (Non-native)</option>
               </select>
             </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="form-residency">Residency Status</label>
+            <select
+              id="form-residency"
+              className="form-control"
+              value={formData.residency_status}
+              onChange={(e) => updateField('residency_status', e.target.value)}
+            >
+              <option value="resident">Resident</option>
+              <option value="migratory">Migratory</option>
+              <option value="summer_visitor">Summer Visitor</option>
+              <option value="vagrant">Vagrant</option>
+            </select>
+          </div>
+          <div className="form-row">
             <div className="form-group">
-              <label htmlFor="form-conservation">Conservation Status</label>
+              <label htmlFor="form-conservation">Global Conservation Status</label>
               <select
                 id="form-conservation"
                 className="form-control"
@@ -450,21 +545,32 @@ export default function AddSpeciesPage() {
               </select>
             </div>
             <div className="form-group">
-              <label htmlFor="form-residency">Residency Status</label>
-              <select
-                id="form-residency"
-                className="form-control"
-                value={formData.residency_status}
-                onChange={(e) => updateField('residency_status', e.target.value)}
-              >
-                <option value="resident">Resident</option>
-                <option value="migratory">Migratory</option>
-                <option value="summer_visitor">Summer Visitor</option>
-                <option value="vagrant">Vagrant</option>
-              </select>
+              <label htmlFor="form-global-status-year">Global assessment year</label>
+              <input id="form-global-status-year" className="form-control" type="number" min="1000" max="2100" value={formData.conservation_status_year} onChange={(e) => updateField('conservation_status_year', e.target.value)} placeholder="e.g. 2022" />
             </div>
           </div>
-
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="form-bd-conservation">Bangladesh Conservation Status</label>
+              <select id="form-bd-conservation" className="form-control" value={formData.bd_conservation_status} onChange={(e) => updateField('bd_conservation_status', e.target.value)}>
+                <option value="">Not Assessed</option>
+                <option value="NE">NE — Not Evaluated</option>
+                <option value="DD">DD — Data Deficient</option>
+                <option value="LC">LC — Least Concern</option>
+                <option value="NT">NT — Near Threatened</option>
+                <option value="VU">VU — Vulnerable</option>
+                <option value="EN">EN — Endangered</option>
+                <option value="CR">CR — Critically Endangered</option>
+                <option value="RE">RE — Regionally Extinct</option>
+                <option value="EW">EW — Extinct in the Wild</option>
+                <option value="EX">EX — Extinct</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label htmlFor="form-bd-status-year">Bangladesh Assessment Year</label>
+              <input id="form-bd-status-year" className="form-control" type="number" min="1000" max="2100" value={formData.bd_conservation_status_year} onChange={(e) => updateField('bd_conservation_status_year', e.target.value)} placeholder="e.g. 2015" />
+            </div>
+          </div>
           <div className="form-group">
             <label htmlFor="form-description">Description</label>
             <textarea
@@ -523,6 +629,22 @@ export default function AddSpeciesPage() {
               <div style={{ flex: 1 }}>
                 <label>EOL URL</label>
                 <input type="url" className="form-control" value={formData.external_links?.eol || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, eol: e.target.value })} placeholder="https://eol.org/pages/..." />
+              </div>
+            </div>
+            <div className="form-row" style={{ marginTop: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <label>POWO URL</label>
+                <input type="url" className="form-control" value={formData.external_links?.powo || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, powo: e.target.value })} placeholder="https://powo.science.kew.org/taxon/..." />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>WFO URL</label>
+                <input type="url" className="form-control" value={formData.external_links?.wfo || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, wfo: e.target.value })} placeholder="https://www.worldfloraonline.org/taxon/..." />
+              </div>
+            </div>
+            <div className="form-row" style={{ marginTop: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <label>Barcode of Life (BOLD) URL</label>
+                <input type="url" className="form-control" value={formData.external_links?.bold || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, bold: e.target.value })} placeholder="https://boldsystems.org/index.php/TaxBrowser_TaxonPage?taxid=..." />
               </div>
             </div>
           </div>
@@ -691,6 +813,16 @@ export default function AddSpeciesPage() {
                 />
               </div>
             </div>
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="form-taxonomic-authority">Taxonomic authority</label>
+                <input id="form-taxonomic-authority" className="form-control" value={formData.taxonomy.taxonomic_authority} onChange={(e) => updateTaxonomy('taxonomic_authority', e.target.value)} placeholder="e.g. Hodgson" />
+              </div>
+              <div className="form-group">
+                <label htmlFor="form-authority-year">Authority year</label>
+                <input id="form-authority-year" className="form-control" type="number" min="1000" max="2100" value={formData.taxonomy.authority_year} onChange={(e) => updateTaxonomy('authority_year', e.target.value)} placeholder="e.g. 1845" />
+              </div>
+            </div>
           </div>
 
           {/* Location coordinates (JSON) */}
@@ -712,16 +844,28 @@ export default function AddSpeciesPage() {
           {/* Status */}
           <div className="form-group">
             <label htmlFor="form-status">Status</label>
-            <select
-              id="form-status"
-              className="form-control"
-              value={formData.status}
-              onChange={(e) => updateField('status', e.target.value)}
-            >
-              <option value="draft">Draft</option>
-              <option value="pending_review">Pending Review</option>
-              <option value="published">Published</option>
-            </select>
+            {userRole === 'admin' ? (
+              <select
+                id="form-status"
+                className="form-control"
+                value={formData.status}
+                onChange={(e) => updateField('status', e.target.value)}
+              >
+                <option value="draft">Draft</option>
+                <option value="pending_review">Pending Review</option>
+                <option value="published">Published</option>
+              </select>
+            ) : (
+              <select
+                id="form-status"
+                className="form-control"
+                value={formData.status}
+                onChange={(e) => updateField('status', e.target.value)}
+              >
+                <option value="draft">Draft</option>
+                <option value="pending_review">Pending Review</option>
+              </select>
+            )}
           </div>
 
           <small style={{ color: 'var(--text-muted)', fontSize: '11px', display: 'block', marginTop: '-4px' }}>

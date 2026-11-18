@@ -74,6 +74,70 @@
   --status-en: #ef6c00;
   --status-cr: #d32f2f;
   --status-re: #8b0000;
-  --status-ew: #6a1b9a;
   --status-ex: #000000;
+}
+
+/* ============================================================
+   Dark Mode Theme
+   ============================================================ */
+[data-theme="dark"] {
+  /* --- Backgrounds --- */
+  --bg-primary: #121413;
+  --bg-secondary: #1a1d1b;
+  --bg-card: #222624;
+  --bg-elevated: #2a2f2c;
+
+  /* --- Accent: Brighter Forest Green --- */
+  --accent-primary: #10a37f;
+  --accent-secondary: #20c997;
+  --accent-glow: rgba(16, 163, 127, 0.35);
+  --accent-subtle: rgba(16, 163, 127, 0.15);
+  --accent-gradient: linear-gradient(
+    135deg,
+    #10a37f 0%,
+    #0D7C66 50%,
+    #085a4a 100%
+  );
+  --accent-gradient-hover: linear-gradient(
+    135deg,
+    #20c997 0%,
+    #10a37f 50%,
+    #0D7C66 100%
+  );
+
+  /* --- Text --- */
+  --text-primary: #e2e8e4;
+  --text-secondary: #94a39b;
+  --text-muted: #6b7280;
+
+  /* --- Borders --- */
+  --border-color: #37413b;
+  --border-hover: #4b554f;
+
+  /* --- Shadows --- */
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 20px rgba(16, 163, 127, 0.2);
+
+  /* --- Glass (dark mode) --- */
+  --glass-bg: rgba(34, 38, 36, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.08);
+
+  /* --- Category Colors --- */
+  --flora-color: #4ade80;
+  --flora-bg: rgba(74, 222, 128, 0.15);
+  --fauna-color: #fb923c;
+  --fauna-bg: rgba(251, 146, 60, 0.15);
+  
+  /* Conservation Status Colors adjusted for dark mode contrast */
+  --status-ne: #6b7280;
+  --status-dd: #6b7280;
+  --status-lc: #2dd4bf;
+  --status-nt: #a3e635;
+  --status-vu: #facc15;
+  --status-en: #fb923c;
+  --status-cr: #f87171;
+  --status-re: #ef4444;
+  --status-ew: #c084fc;
+  --status-ex: #d1d5db;
 }

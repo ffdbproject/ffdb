@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, Fragment } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
 import { speciesAPI } from '../services/api';
@@ -12,6 +12,7 @@ function getFiltersFromSearch(search) {
     cursor: params.get('cursor') || '',
     category: params.get('category') || '',
     origin: params.get('origin') || '',
+    residency_status: params.get('residency_status') || '',
     conservation_status: params.get('conservation_status') || '',
     kingdom: params.get('kingdom') || '',
     phylum: params.get('phylum') || '',
@@ -28,6 +29,7 @@ function buildSearchFromFilters(filters) {
   if (filters.cursor) params.set('cursor', filters.cursor);
   if (filters.category) params.set('category', filters.category);
   if (filters.origin) params.set('origin', filters.origin);
+  if (filters.residency_status) params.set('residency_status', filters.residency_status);
   if (filters.conservation_status) params.set('conservation_status', filters.conservation_status);
   if (filters.kingdom) params.set('kingdom', filters.kingdom);
   if (filters.phylum) params.set('phylum', filters.phylum);
@@ -85,7 +87,7 @@ export default function SpeciesListPage() {
 
   useEffect(() => {
     async function fetchSpecies() {
-      const cacheKey = `ffdb_browse_cache_${location.search}`;
+      const cacheKey = `ffdb_browse_cache_v2_${location.search}`;
 
       // On back-navigation, instantly restore cached data while
       // re-fetching in the background for freshness.
@@ -94,7 +96,7 @@ export default function SpeciesListPage() {
           const cached = sessionStorage.getItem(cacheKey);
           if (cached) {
             const { data, pagination: pag } = JSON.parse(cached);
-            setSpecies(data);
+            setSpecies(data.filter((item) => item.status === 'published'));
             setPagination(pag);
             setLoading(false);
             // Still re-fetch silently in background
@@ -102,6 +104,7 @@ export default function SpeciesListPage() {
               const params = { page: filters.page, limit: filters.limit };
               if (filters.category) params.category = filters.category;
               if (filters.origin) params.origin = filters.origin;
+              if (filters.residency_status) params.residency_status = filters.residency_status;
               if (filters.conservation_status) params.conservation_status = filters.conservation_status;
               if (filters.kingdom) params.kingdom = filters.kingdom;
               if (filters.phylum) params.phylum = filters.phylum;
@@ -110,6 +113,8 @@ export default function SpeciesListPage() {
               if (filters.family) params.family = filters.family;
               if (filters.genus) params.genus = filters.genus;
               const res = await speciesAPI.getAll(params);
+              setSpecies(res.data.filter((item) => item.status === 'published'));
+              setPagination(res.pagination);
               sessionStorage.setItem(cacheKey, JSON.stringify({ data: res.data, pagination: res.pagination }));
             } catch { /* ignore background refresh errors */ }
             return;
@@ -123,6 +128,7 @@ export default function SpeciesListPage() {
         if (filters.cursor) params.cursor = filters.cursor;
         if (filters.category) params.category = filters.category;
         if (filters.origin) params.origin = filters.origin;
+        if (filters.residency_status) params.residency_status = filters.residency_status;
         if (filters.conservation_status) params.conservation_status = filters.conservation_status;
         if (filters.kingdom) params.kingdom = filters.kingdom;
         if (filters.phylum) params.phylum = filters.phylum;
@@ -132,7 +138,7 @@ export default function SpeciesListPage() {
         if (filters.genus) params.genus = filters.genus;
 
         const res = await speciesAPI.getAll(params);
-        setSpecies(res.data);
+        setSpecies(res.data.filter((item) => item.status === 'published'));
         setPagination(res.pagination);
         // Intentionally avoid aggressive preloading here; the image queue in
         // SafeImage now controls concurrency and keeps the browser from firing
@@ -226,7 +232,7 @@ export default function SpeciesListPage() {
         <meta name="twitter:title" content="Browse Species - FFDB" />
         <meta name="twitter:description" content="Browse the complete catalog of flora and fauna species in Bangladesh." />
         {/* Prevent Google from indexing paginated/filtered variants as separate pages */}
-        {(filters.page > 1 || filters.category || filters.origin || filters.conservation_status) && (
+        {(filters.page > 1 || filters.category || filters.origin || filters.residency_status || filters.conservation_status) && (
           <meta name="robots" content="noindex, follow" />
         )}
         <link rel="canonical" href={canonicalUrl} />
@@ -280,6 +286,18 @@ export default function SpeciesListPage() {
           <option value="">All Origins</option>
           <option value="native">Native</option>
           <option value="exotic">Exotic</option>
+        </select>
+
+        <select
+          className="filter-select"
+          value={filters.residency_status}
+          onChange={(e) => handleFilterChange('residency_status', e.target.value)}
+          id="filter-residency"
+        >
+          <option value="">All Residency</option>
+          <option value="resident">Resident</option>
+          <option value="migratory">Migratory</option>
+          <option value="vagrant">Vagrant</option>
         </select>
       </div>
 
@@ -363,10 +381,10 @@ export default function SpeciesListPage() {
               {Array.from({ length: pagination.totalPages }, (_, i) => i + 1)
                 .filter((p) => {
                   // Show first, last, and pages near current
-                  return p === 1 || p === pagination.totalPages || Math.abs(p - pagination.page) <= 2;
+                  return p === 1 || p === pagination.totalPages || Math.abs(p - pagination.page) <= 1;
                 })
                 .map((p, idx, arr) => (
-                  <span key={p}>
+                  <Fragment key={p}>
                     {idx > 0 && arr[idx - 1] !== p - 1 && (
                       <button disabled>...</button>
                     )}
@@ -376,7 +394,7 @@ export default function SpeciesListPage() {
                     >
                       {p}
                     </button>
-                  </span>
+                  </Fragment>
                 ))}
               <button
                 disabled={!pagination.hasNextPage}

@@ -4,7 +4,15 @@ import { HelmetProvider } from 'react-helmet-async'
 import './index.css'
 import App from './App.jsx'
 
-document.title = 'Flora and Fauna Database of Bangladesh';
+// Initialize theme before React renders
+try {
+  const theme = localStorage.getItem('ffdb_theme');
+  if (theme === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+} catch (e) {}
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

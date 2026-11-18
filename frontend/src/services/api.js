@@ -122,6 +122,13 @@ export const speciesAPI = {
   },
 
   /**
+   * Preview an unpublished draft or pending species (admin/contributor only).
+   */
+  getPreview(id) {
+    return request(`/species/preview/${id}`);
+  },
+
+  /**
    * Create a new species record.
    */
   create(speciesData) {
@@ -179,16 +186,31 @@ export const speciesAPI = {
   },
 
   /**
-   * Get dashboard statistics.
+   * Check if a scientific name already exists
    */
-  getStats() {
-    return request('/species/stats/overview');
+  checkName(scientific_name) {
+    return request(`/species/check-name?scientific_name=${encodeURIComponent(scientific_name)}`, {
+      skipAuth: true,
+      silentError: true,
+    });
+  },
+
+  /**
+   * Get dashboard statistics.
+   * @param {Object} params - Optional { scope: 'admin' | 'published' }
+   */
+  getStats(params = {}) {
+    const query = new URLSearchParams(params).toString();
+    return request(`/species/stats/overview${query ? `?${query}` : ''}`);
   },
   /**
    * Trigger backend enrichment for a species (admin only).
    */
   enrich(id) {
     return request(`/admin/enrich/${id}`, { method: 'POST' });
+  },
+  previewEnrich(id) {
+    return request(`/admin/enrich-preview/${id}`);
   },
 };
 
@@ -265,19 +287,52 @@ export const teamAPI = {
   },
 };
 
+export const noticeAPI = {
+  getActive() {
+    return request('/notice', { credentials: 'omit' });
+  },
+  getAdmin() {
+    return request('/admin/notice');
+  },
+  update(payload) {
+    return request('/admin/notice', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
 // ============================================================
 // DATABASE API (Admin)
 // ============================================================
 
 export const databaseAPI = {
+  // Export as JSON by default. For CSV/XLSX use downloadExport(format)
   export() {
     return request('/admin/database/export');
   },
+  async downloadExport(format = 'json') {
+    const url = `${API_BASE}/admin/database/export?format=${encodeURIComponent(format)}`;
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) {
+      let txt = await res.text();
+      throw new Error(`Export failed: ${res.status} ${txt}`);
+    }
+    const blob = await res.blob();
+    return blob;
+  },
   import(data) {
+    // If data is FormData (file upload), send directly
+    if (data instanceof FormData) {
+      return request('/admin/database/import', {
+        method: 'POST',
+        body: data,
+      });
+    }
+
     return request('/admin/database/import', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 };
-

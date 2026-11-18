@@ -8,14 +8,18 @@ import { lazy, Suspense, useEffect, useRef } from 'react';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import CookieBanner from './components/CookieBanner';
+import AppErrorBoundary from './components/AppErrorBoundary';
+import HomePage from './pages/HomePage';
 
-const HomePage = lazy(() => import('./pages/HomePage'));
 const SpeciesListPage = lazy(() => import('./pages/SpeciesListPage'));
 const SpeciesDetailPage = lazy(() => import('./pages/SpeciesDetailPage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
 const ContributePage = lazy(() => import('./pages/ContributePage'));
 const ReportProblemPage = lazy(() => import('./pages/ReportProblemPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
+const ExportDatabasePage = lazy(() => import('./pages/ExportDatabasePage'));
+const ImportDatabasePage = lazy(() => import('./pages/ImportDatabasePage'));
+const AdminLoginPage = lazy(() => import('./pages/AdminLoginPage'));
 const AddSpeciesPage = lazy(() => import('./pages/AddSpeciesPage'));
 const ApiDocsPage = lazy(() => import('./pages/ApiDocsPage'));
 const TeamPage = lazy(() => import('./pages/TeamPage'));
@@ -44,31 +48,46 @@ function AppShell() {
     previousPathRef.current = currentPath;
   }, [location.pathname, location.search, location.hash]);
 
+  // Clean up server-rendered tags ONLY after React and Helmet have fully mounted.
+  // This ensures the <head> is never left naked or empty during the initial boot.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      document.querySelectorAll('[data-server-rendered="true"]').forEach((el) => el.remove());
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []);
+
   const isAdminRoute = location.pathname.startsWith('/admin');
 
   return (
     <div className="app">
       {!isAdminRoute && <Navbar />}
       <main>
-        <Suspense fallback={<div style={{ padding: '80px 20px', textAlign: 'center' }}>Loading...</div>}>
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/species" element={<SpeciesListPage />} />
-            <Route path="/species/:id" element={<SpeciesDetailPage />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/contribute" element={<ContributePage />} />
-            <Route path="/report-problem" element={<ReportProblemPage />} />
-            <Route path="/team" element={<TeamPage />} />
-            <Route path="/about" element={<AboutPage />} />
-            <Route path="/privacy" element={<PrivacyPage />} />
-            <Route path="/terms" element={<TermsPage />} />
-            <Route path="/contact" element={<ContactPage />} />
-            <Route path="/api-docs" element={<ApiDocsPage />} />
-            <Route path="/admin/species/add" element={<AddSpeciesPage />} />
-            <Route path="/admin" element={<AdminPage />} />
-            <Route path="*" element={<NotFoundPage />} />
-          </Routes>
-        </Suspense>
+        <AppErrorBoundary>
+          <Suspense fallback={<div style={{ padding: '80px 20px', textAlign: 'center' }}>Loading...</div>}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/species" element={<SpeciesListPage />} />
+              <Route path="/species/preview/:id" element={<SpeciesDetailPage isPreview={true} />} />
+              <Route path="/species/:id" element={<SpeciesDetailPage />} />
+              <Route path="/search" element={<SearchPage />} />
+              <Route path="/contribute" element={<ContributePage />} />
+              <Route path="/report-problem" element={<ReportProblemPage />} />
+              <Route path="/team" element={<TeamPage />} />
+              <Route path="/about" element={<AboutPage />} />
+              <Route path="/privacy" element={<PrivacyPage />} />
+              <Route path="/terms" element={<TermsPage />} />
+              <Route path="/contact" element={<ContactPage />} />
+              <Route path="/api-docs" element={<ApiDocsPage />} />
+              <Route path="/admin/species/add" element={<AddSpeciesPage />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="/admin/database/export" element={<ExportDatabasePage />} />
+              <Route path="/admin/database/import" element={<ImportDatabasePage />} />
+              <Route path="/admin/login" element={<AdminLoginPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
+        </AppErrorBoundary>
       </main>
       {!isAdminRoute && <Footer />}
       <CookieBanner />

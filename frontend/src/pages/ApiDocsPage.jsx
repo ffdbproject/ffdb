@@ -5,6 +5,7 @@ const endpointGroups = [
     title: 'Public data',
     items: [
       { method: 'GET', path: '/api/health', summary: 'Health check' },
+      { method: 'GET', path: '/api/public/data-dump?format=json|csv', summary: 'Bulk download published species dataset with Bengali names, taxonomy authority, conservation assessments, years, images, references, and links' },
       { method: 'GET', path: '/api/species', summary: 'List published species with pagination and filters' },
       { method: 'GET', path: '/api/species/:id', summary: 'Fetch a single species with taxonomy and images' },
       { method: 'POST', path: '/api/species/contribute', summary: 'Public contribution endpoint (always stored as draft)' },
@@ -21,6 +22,7 @@ const endpointGroups = [
       { method: 'POST', path: '/api/admin/login', summary: 'Create an HttpOnly admin session cookie' },
       { method: 'POST', path: '/api/admin/logout', summary: 'Clear the admin session' },
       { method: 'GET', path: '/api/admin/me', summary: 'Check current authentication status' },
+      { method: 'GET', path: '/api/species/check-name', summary: 'Real-time check if scientific name exists' },
       { method: 'POST', path: '/api/species', summary: 'Create a species record' },
       { method: 'PUT', path: '/api/species/:id', summary: 'Update a species record' },
       { method: 'POST', path: '/api/species/:id/delete', summary: 'Delete a species record' },
@@ -29,6 +31,8 @@ const endpointGroups = [
       { method: 'POST', path: '/api/admin/enrich/:id', summary: 'Trigger backend enrichment for a species' },
       { method: 'GET', path: '/api/admin/gbif/search?q=term', summary: 'Search GBIF from the admin panel' },
       { method: 'GET', path: '/api/admin/gbif/species/:gbifKey', summary: 'Fetch detailed GBIF species data' },
+      { method: 'GET', path: '/api/admin/database/export', summary: 'Export full database (JSON, CSV, or XLSX)' },
+      { method: 'POST', path: '/api/admin/database/import', summary: 'Import species records from JSON/CSV/XLSX file' },
       { method: 'GET', path: '/api/admin/team', summary: 'Get team members (admin view)' },
       { method: 'POST', path: '/api/admin/team', summary: 'Create a team member' },
       { method: 'PUT', path: '/api/admin/team/:id', summary: 'Update a team member' },
@@ -97,7 +101,13 @@ export default function ApiDocsPage() {
       <div className="docs-grid">
         <section className="docs-card">
           <h2>Quick start</h2>
-          <pre className="docs-code-block"><code>{`# List species (paginated)
+          <pre className="docs-code-block"><code>{`# Bulk download complete dataset (JSON format)
+curl "${siteOrigin || 'https://your-domain.com'}/api/public/data-dump?format=json" -o ffdb-dataset.json
+
+# Bulk download complete dataset (CSV format)
+curl "${siteOrigin || 'https://your-domain.com'}/api/public/data-dump?format=csv" -o ffdb-dataset.csv
+
+# List species (paginated)
 curl ${siteOrigin || 'https://your-domain.com'}/api/species?limit=5
 
 # Fetch a single species by ID
@@ -127,6 +137,9 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
       "category": "fauna",
       "origin": "native",
       "conservation_status": "EN",
+      "conservation_status_year": 2022,
+      "bd_conservation_status": "EN",
+      "bd_conservation_status_year": 2015,
       "status": "published",
       "created_at": "2025-12-01T10:30:00.000Z",
       "updated_at": "2025-12-15T08:45:00.000Z",
@@ -148,6 +161,22 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
         </section>
 
         <section className="docs-card">
+          <h2>CSV columns</h2>
+          <p>
+            The CSV download includes the same public species metadata as JSON,
+            flattened into columns. Bengali text is returned as UTF-8 with a BOM
+            for compatibility with spreadsheet applications.
+          </p>
+          <pre className="docs-code-block"><code>{`public_id, scientific_name, english_name, bengali_name,
+category, origin, conservation_status, conservation_status_year,
+bd_conservation_status, bd_conservation_status_year, residency_status,
+kingdom, phylum, class, order, family, genus,
+taxonomic_authority, authority_year, description, habitat,
+primary_image, images, location_coordinates, external_links, references,
+status, published_at, created_at, updated_at`}</code></pre>
+        </section>
+
+        <section className="docs-card">
           <h2>Detail response shape</h2>
           <pre className="docs-code-block"><code>{`// GET /api/species/SP-0003
 {
@@ -163,6 +192,9 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
     "description": "<p>A large cat species...</p>",
     "habitat": "Sundarbans mangrove forests",
     "conservation_status": "EN",
+    "conservation_status_year": 2022,
+    "bd_conservation_status": "EN",
+    "bd_conservation_status_year": 2015,
     "residency_status": "Resident",
     "references": [{"type": "wikipedia", "url": "..."}],
     "external_links": {
@@ -178,7 +210,9 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
       "class": "Mammalia",
       "order": "Carnivora",
       "family": "Felidae",
-      "genus": "Panthera"
+      "genus": "Panthera",
+      "taxonomic_authority": "Linnaeus",
+      "authority_year": 1758
     },
     "location_coordinates": [],
     "images": [{
@@ -209,6 +243,9 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
       "bengali_name": "বাঘ",
       "category": "fauna",
       "conservation_status": "EN",
+      "conservation_status_year": 2022,
+      "bd_conservation_status": "EN",
+      "bd_conservation_status_year": 2015,
       "habitat": "Sundarbans mangrove forests",
       "status": "published",
       "created_at": "2025-12-01T10:30:00.000Z",
@@ -226,6 +263,16 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
     "hasPreviousPage": false
   }
 }`}</code></pre>
+        </section>
+
+        <section className="docs-card">
+          <h2>Rate limiting &amp; Quotas</h2>
+          <ul className="docs-list">
+            <li><strong>External API requests:</strong> 500 requests per hour per IP.</li>
+            <li><strong>Bulk Data Dump:</strong> 10 dataset downloads per hour per IP.</li>
+            <li><strong>Response headers:</strong> Track your remaining quota using <code>RateLimit-Limit</code>, <code>RateLimit-Remaining</code>, and <code>RateLimit-Reset</code> headers.</li>
+            <li><strong>Researcher Access:</strong> For heavy research tasks, prefer downloading the bulk dataset (JSON/CSV) at <code>/api/public/data-dump</code> instead of calling live endpoints repeatedly.</li>
+          </ul>
         </section>
 
         <section className="docs-card">
@@ -264,6 +311,7 @@ curl ${siteOrigin || 'https://your-domain.com'}/api/search/suggest?q=pan`}</code
           <span className="docs-pill">origin=native|exotic</span>
           <span className="docs-pill">status=draft|pending_review|published</span>
           <span className="docs-pill">conservation_status=LC|NT|VU|EN|CR|EW|EX</span>
+          <span className="docs-pill">conservation_status_year=2022</span>
           <span className="docs-pill">page=1&amp;limit=20</span>
           <span className="docs-pill">cursor=&lt;nextCursor&gt;</span>
         </div>

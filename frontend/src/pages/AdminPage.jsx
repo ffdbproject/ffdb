@@ -1,20 +1,24 @@
 // ============================================================
 // FFDB - Flora and Fauna Database of Bangladesh
-// Admin Dashboard — Step 8
+// Admin Dashboard
 //
 // Full admin UI with:
-//   • Stats overview (total, flora/fauna, status breakdown)
-//   • Species management table with status filters + workflow actions
-//   • GBIF data sourcing (search → preview → import as draft)
-//   • Species create/edit form (all fields + taxonomy)
-//   • Draft → Pending Review → Published workflow
+//   - Stats overview (total, flora/fauna, status breakdown)
+//   - Species management table with status filters + workflow actions
+//   - GBIF data sourcing (search -> preview -> import as draft)
+//   - Species create/edit form (all fields + taxonomy)
+//   - Draft -> Pending Review -> Published workflow
+//   - Team management
+//   - User reports management
 // ============================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Helmet } from 'react-helmet-async';
-import { speciesAPI, gbifAPI, authAPI, teamAPI, databaseAPI } from '../services/api';
+import { speciesAPI, gbifAPI, authAPI, teamAPI, databaseAPI, noticeAPI } from '../services/api';
 import SafeImage from '../components/SafeImage';
+import LoadingSpinner from './_SharedLoading';
+import ThemeToggle from '../components/ThemeToggle';
 import { preloadRoute } from '../utils/routePreload';
 
 // ---- Status workflow helpers ----
@@ -44,6 +48,9 @@ const EMPTY_FORM = {
   description: '',
   habitat: '',
   conservation_status: '',
+  conservation_status_year: '',
+  bd_conservation_status: '',
+  bd_conservation_status_year: '',
   residency_status: 'resident',
   references: '',
   external_links: {},
@@ -53,19 +60,22 @@ const EMPTY_FORM = {
   additional_image_urls: '',
   additional_image_credits: '',
   status: 'published',
-  taxonomy: { kingdom: '', phylum: '', class: '', order: '', family: '', genus: '' },
+  taxonomy: { kingdom: '', phylum: '', class: '', order: '', family: '', genus: '', taxonomic_authority: '', authority_year: '' },
 };
 
 // ============================================================
 //  MAIN ADMIN PAGE
 // ============================================================
 export default function AdminPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('dashboard');
 
   // Admin Auth Config
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [userRole, setUserRole] = useState(null);
+  const [userLabel, setUserLabel] = useState(null);
 
   // Read tab from URL on mount
   useEffect(() => {
@@ -77,34 +87,25 @@ export default function AdminPage() {
 
   useEffect(() => {
     authAPI.checkAuth()
-      .then(() => {
+      .then((data) => {
         setIsAuthenticated(true);
-        sessionStorage.setItem('ffdb_admin_authenticated', '1');
+        setUserRole(data.user?.role || 'admin');
+        setUserLabel(data.user?.label || null);
+        localStorage.setItem('ffdb_admin_authenticated', '1');
       })
       .catch(() => {
         setIsAuthenticated(false);
-        sessionStorage.removeItem('ffdb_admin_authenticated');
+        setUserRole(null);
+        setUserLabel(null);
+        localStorage.removeItem('ffdb_admin_authenticated');
       })
       .finally(() => setAuthLoading(false));
   }, []);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    const key = e.target.apiKey.value;
-    try {
-      await authAPI.login(key);
-      sessionStorage.setItem('ffdb_admin_authenticated', '1');
-      setIsAuthenticated(true);
-      window.location.reload();
-    } catch (err) {
-      alert(err.message || 'Login failed');
-    }
-  };
-
   const handleLogout = async () => {
     try {
       await authAPI.logout();
-      sessionStorage.removeItem('ffdb_admin_authenticated');
+      localStorage.removeItem('ffdb_admin_authenticated');
       setIsAuthenticated(false);
     } catch (err) {
       alert('Logout failed');
@@ -115,34 +116,30 @@ export default function AdminPage() {
     return <div style={{ padding: '100px', textAlign: 'center' }}>Loading...</div>;
   }
 
-  const tabs = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'species', label: 'Manage Species' },
-    { id: 'reports', label: 'Reports' },
-    { id: 'team', label: 'Team' },
-    { id: 'gbif', label: 'Import from GBIF' },
-  ];
+  const isAdmin = userRole === 'admin';
 
+  const tabs = isAdmin
+    ? [
+        { id: 'dashboard', label: 'Dashboard' },
+        { id: 'species', label: 'Manage Species' },
+        { id: 'reports', label: 'Reports' },
+        { id: 'team', label: 'Team' },
+        { id: 'notice', label: 'Site Notice' },
+        { id: 'gbif', label: 'Import from GBIF' },
+      ]
+    : [
+        { id: 'species', label: 'My Submissions' },
+      ];
+
+  // Default contributor to species tab
+  if (!isAdmin && activeTab === 'dashboard') {
+      setActiveTab('species');
+  }
+
+  // Redirect unauthenticated users to the dedicated login page
   if (!isAuthenticated) {
-    return (
-      <div className="container" style={{ paddingTop: '100px', maxWidth: '400px' }}>
-        <Helmet>
-          <title>Admin Login - FFDB</title>
-          <meta name="robots" content="noindex, nofollow" />
-          <meta property="og:site_name" content="FFDB" />
-        </Helmet>
-        <div style={{ background: 'var(--bg-secondary)', padding: '30px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius)' }}>
-          <h2 style={{ marginBottom: '20px' }}>Admin Login</h2>
-          <form onSubmit={handleLogin}>
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 600 }}>API Key</label>
-              <input type="password" name="apiKey" required style={{ width: '100%', padding: '10px', borderRadius: '4px', border: '1px solid var(--border-color)' }} placeholder="Enter admin API key" />
-            </div>
-            <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>Login</button>
-          </form>
-        </div>
-      </div>
-    );
+    navigate('/admin/login', { replace: true });
+    return null;
   }
 
   return (
@@ -187,6 +184,22 @@ export default function AdminPage() {
               {t.label}
             </button>
           ))}
+          <span style={{
+            display: 'inline-block',
+            padding: '3px 10px',
+            borderRadius: '12px',
+            fontSize: '11px',
+            fontWeight: 600,
+            letterSpacing: '0.5px',
+            textTransform: 'uppercase',
+            background: isAdmin ? 'rgba(45, 138, 78, 0.12)' : 'rgba(59, 130, 246, 0.12)',
+            color: isAdmin ? '#2d8a4e' : '#3b82f6',
+            marginRight: '12px',
+            marginLeft: 'auto',
+          }}>
+            {isAdmin ? 'Admin' : 'Contributor'}
+          </span>
+          <ThemeToggle />
           <button
             onClick={handleLogout}
             style={{
@@ -198,7 +211,6 @@ export default function AdminPage() {
               color: 'var(--text-secondary)',
               border: 'none',
               cursor: 'pointer',
-              marginLeft: 'auto',
             }}
           >
             Logout
@@ -209,9 +221,10 @@ export default function AdminPage() {
       {/* ---- Tab Content ---- */}
       <div className="container" style={{ paddingTop: '32px', paddingBottom: '80px' }}>
         {activeTab === 'dashboard' && <DashboardTab />}
-        {activeTab === 'species'   && <SpeciesManagerTab />}
+        {activeTab === 'species'   && <SpeciesManagerTab userRole={userRole} />}
         {activeTab === 'reports'   && <ReportsManagerTab />}
         {activeTab === 'team'      && <TeamManagerTab />}
+        {activeTab === 'notice'    && <NoticeManagerTab />}
         {activeTab === 'gbif'      && <GBIFImportTab />}
       </div>
     </div>
@@ -226,7 +239,7 @@ function DashboardTab() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    speciesAPI.getStats()
+    speciesAPI.getStats({ scope: 'admin' })
       .then((res) => setStats(res.data))
       .catch(() => setStats(null))
       .finally(() => setLoading(false));
@@ -314,7 +327,8 @@ function DashboardTab() {
 // ============================================================
 //  SPECIES MANAGER TAB — Table + Create/Edit
 // ============================================================
-function SpeciesManagerTab() {
+function SpeciesManagerTab({ userRole = 'admin' }) {
+  const isAdmin = userRole === 'admin';
   const navigate = useNavigate();
   const [species, setSpecies] = useState([]);
   const [pagination, setPagination] = useState({});
@@ -344,9 +358,10 @@ function SpeciesManagerTab() {
   const fetchSpecies = useCallback(async () => {
     setLoading(true);
     try {
-      const params = { page, limit: 15 };
+      const params = { page, limit: 15, admin_view: true };
       if (statusFilter)   params.status = statusFilter;
       if (categoryFilter) params.category = categoryFilter;
+      if (searchTerm.trim()) params.search = searchTerm.trim();
       const res = await speciesAPI.getAll(params);
       const rows = Array.isArray(res.data)
         ? res.data
@@ -360,7 +375,7 @@ function SpeciesManagerTab() {
     } finally {
       setLoading(false);
     }
-  }, [page, statusFilter, categoryFilter]);
+  }, [page, statusFilter, categoryFilter, searchTerm]);
 
   useEffect(() => { fetchSpecies(); }, [fetchSpecies]);
 
@@ -469,7 +484,7 @@ function SpeciesManagerTab() {
   // ---- Open edit form ----
   const openEdit = async (id) => {
     try {
-      const res = await speciesAPI.getById(id);
+      const res = await speciesAPI.getPreview(id);
       const s = res.data;
       const featuredImage = (s.images || []).find((img) => img.is_primary);
       const additionalImages = (s.images || []).filter((img) => !img.is_primary);
@@ -482,6 +497,9 @@ function SpeciesManagerTab() {
         description: s.description || '',
         habitat: s.habitat || null,
         conservation_status: s.conservation_status || '',
+        conservation_status_year: s.conservation_status_year || '',
+        bd_conservation_status: s.bd_conservation_status || '',
+        bd_conservation_status_year: s.bd_conservation_status_year || '',
         residency_status: s.residency_status || 'resident',
         references: s.references || '',
         external_links: s.external_links || {},
@@ -498,6 +516,8 @@ function SpeciesManagerTab() {
           order: s.taxonomy?.order || '',
           family: s.taxonomy?.family || '',
           genus: s.taxonomy?.genus || '',
+          taxonomic_authority: s.taxonomy?.taxonomic_authority || '',
+          authority_year: s.taxonomy?.authority_year || '',
         },
       });
       setEditingId(id);
@@ -579,6 +599,9 @@ function SpeciesManagerTab() {
       description: formData.description,
       habitat: formData.habitat,
       conservation_status: formData.conservation_status,
+      conservation_status_year: formData.conservation_status_year || null,
+      bd_conservation_status: formData.bd_conservation_status || null,
+      bd_conservation_status_year: formData.bd_conservation_status_year || null,
       residency_status: formData.residency_status,
       references: formData.references,
       external_links: formData.external_links,
@@ -624,25 +647,7 @@ function SpeciesManagerTab() {
     } catch (err) {
       showToast(err.message || 'Failed to save', 'error');
     }
-  };
-
-  const normalizedSearch = searchTerm.trim().toLowerCase();
-  const filteredSpecies = normalizedSearch
-    ? species.filter((s) => {
-      const candidate = [
-        s.scientific_name,
-        s.english_name,
-        s.bengali_name,
-        s.family,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return candidate.includes(normalizedSearch);
-    })
-    : species;
-
-  return (
+  };  return (
     <div>
       {/* Toast notification */}
       {toast && <Toast message={toast.message} type={toast.type} />}
@@ -650,26 +655,32 @@ function SpeciesManagerTab() {
       {/* Header row */}
       <div className="admin-section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '4px' }}>Species Manager</h2>
+          <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '4px' }}>
+            {isAdmin ? 'Species Manager' : 'My Submissions'}
+          </h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
             {pagination.totalRecords ?? '—'} total records
           </p>
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
-          <button
-            className="btn btn-secondary"
-            onClick={handleExport}
-            title="Download full database as JSON"
-          >
-            Export DB
-          </button>
-          <button
-            className="btn btn-secondary"
-            onClick={handleImportClick}
-            title="Upload JSON database backup"
-          >
-            Import DB
-          </button>
+          {isAdmin && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate('/admin/database/export')}
+              title="Open Export Database page"
+            >
+              Export DB
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => navigate('/admin/database/import')}
+              title="Open Import Database page"
+            >
+              Import DB
+            </button>
+          )}
           <button
             className="btn btn-primary"
             id="btn-create-species"
@@ -710,15 +721,15 @@ function SpeciesManagerTab() {
           className="filter-select"
           type="search"
           id="filter-search"
-          placeholder="Quick search by name or family"
+          placeholder="Quick search by name, ID, or family"
           value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
+          onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
           style={{ minWidth: '240px' }}
         />
       </div>
 
       {/* Species Table */}
-      {loading ? <LoadingSpinner /> : filteredSpecies.length === 0 ? (
+      {loading ? <LoadingSpinner /> : species.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">No Result</div>
           <h3>No species found</h3>
@@ -739,7 +750,7 @@ function SpeciesManagerTab() {
                 </tr>
               </thead>
               <tbody>
-                {filteredSpecies.map((s) => (
+                {species.map((s) => (
                   <tr key={s.id}>
                     <td>
                       <div style={{ fontWeight: 600, fontSize: '14px' }}>{s.english_name || s.scientific_name}</div>
@@ -760,16 +771,67 @@ function SpeciesManagerTab() {
                     </td>
                     <td>
                       <div className="actions">
+                        {s.status === 'published' ? (
+                          <a
+                            href={s.status === 'published'
+                              ? `/species/${s.public_id || s.id}`
+                              : `/species/preview/${s.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary btn-sm"
+                            title="View live published page"
+                            style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                            View
+                          </a>
+                        ) : (
+                          <a
+                            href={`/species/preview/${s.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-secondary btn-sm"
+                            title="Preview unpublished draft"
+                            style={{
+                              textDecoration: 'none',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '5px',
+                              background: '#fef3c7',
+                              color: '#92400e',
+                              borderColor: '#fde68a',
+                              fontWeight: 600,
+                            }}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                            Preview
+                          </a>
+                        )}
                         <button className="btn btn-secondary btn-sm" onClick={() => openEdit(s.id)} title="Edit">
                           Edit
                         </button>
-                        {STATUS_FLOW[s.status]?.next && (
+                        {s.status === 'draft' && (
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={() => advanceStatus(s.id, s.status)}
-                            title={STATUS_FLOW[s.status].label}
+                            title="Submit for Review"
                           >
-                            {STATUS_FLOW[s.status].label}
+                            Submit for Review
+                          </button>
+                        )}
+                        {isAdmin && s.status === 'pending_review' && (
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => advanceStatus(s.id, s.status)}
+                            title="Approve and Publish"
+                          >
+                            Approve and Publish
                           </button>
                         )}
                         {s.status !== 'draft' && (
@@ -777,9 +839,11 @@ function SpeciesManagerTab() {
                             Draft
                           </button>
                         )}
-                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(s.id, s.scientific_name)} title="Delete">
-                          Delete
-                        </button>
+                        {(isAdmin || s.status !== 'published') && (
+                          <button className="btn btn-danger btn-sm" onClick={() => handleDelete(s.id, s.scientific_name)} title="Delete">
+                            Delete
+                          </button>
+                        )}
                         <button
                           className="btn btn-info btn-sm"
                           onClick={async () => {
@@ -791,7 +855,8 @@ function SpeciesManagerTab() {
                               console.log('Enrich response:', res);
                               const addedImages = res.data?.images_added ?? 0;
                               const addedCoords = res.data?.coords_added ?? 0;
-                              showToast(`Enriched: +${addedImages} images, +${addedCoords} coords`, 'success');
+                              const addedRefs = res.data?.references_added ? ', +references' : '';
+                              showToast(`Enriched: +${addedImages} images, +${addedCoords} coords${addedRefs}`, 'success');
                               await fetchSpecies();
                               // Auto-open edit form to show enriched data with credits
                               setTimeout(() => openEdit(s.id), 300);
@@ -1117,6 +1182,8 @@ function GBIFImportTab() {
   );
 }
 
+// Database import/export is handled on separate pages.
+
 // ============================================================
 //  REPORTS MANAGER TAB — View and manage user reports
 // ============================================================
@@ -1127,6 +1194,7 @@ function ReportsManagerTab() {
   const [statusFilter, setStatusFilter] = useState('');
   const [page, setPage] = useState(1);
   const [stats, setStats] = useState(null);
+  const [selectedReport, setSelectedReport] = useState(null);
   const [toast, setToast] = useState(null);
 
   const showToast = (message, type = 'success') => {
@@ -1268,6 +1336,8 @@ function ReportsManagerTab() {
                             </div>
                           )}
                         </div>
+                      ) : report.species_id ? (
+                        <div>Species #{report.species_id}</div>
                       ) : (
                         <span style={{ color: 'var(--text-muted)' }}>—</span>
                       )}
@@ -1298,10 +1368,7 @@ function ReportsManagerTab() {
                     <td>
                       <button
                         className="btn btn-secondary btn-sm"
-                        onClick={() => {
-                          const fullDesc = `Title: ${report.title}\n\nDescription:\n${report.description}\n\nSpecies: ${report.scientific_name || 'N/A'}\nEmail: ${report.email || 'N/A'}`;
-                          alert(fullDesc);
-                        }}
+                        onClick={() => setSelectedReport(report)}
                         title="View full details"
                       >
                         View
@@ -1330,7 +1397,216 @@ function ReportsManagerTab() {
           )}
         </>
       )}
+
+      {/* Report Details Popup - Identical structure & styling to Edit Species popup */}
+      {selectedReport && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 2000, padding: '20px',
+          }}
+          onClick={() => setSelectedReport(null)}
+        >
+          <div
+            className="admin-form"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxHeight: '90vh', overflowY: 'auto', width: '100%', maxWidth: '600px',
+              animation: 'fadeInUp 0.25s ease',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '22px', fontWeight: 700 }}>
+                Problem Report #{selectedReport.id}
+              </h2>
+              <button
+                onClick={() => setSelectedReport(null)}
+                style={{ background: 'none', border: 'none', fontSize: '22px', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                X
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gap: '16px', marginBottom: '20px' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'block' }}>
+                  Problem Title
+                </label>
+                <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  {selectedReport.title}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'block' }}>
+                  Description
+                </label>
+                <div className="form-control" style={{ minHeight: '100px', whiteSpace: 'pre-wrap', lineHeight: 1.6, background: 'var(--bg-primary)' }}>
+                  {selectedReport.description}
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'block' }}>
+                    Related Species
+                  </label>
+                  <div className="form-control" style={{ background: 'var(--bg-primary)' }}>
+                    {selectedReport.scientific_name || selectedReport.public_id || selectedReport.species_id ? (
+                      <div>
+                        <div style={{ fontStyle: 'italic', fontWeight: 600 }}>{selectedReport.scientific_name || 'Species record'}</div>
+                        {selectedReport.english_name && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{selectedReport.english_name}</div>}
+                        <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>ID: {selectedReport.public_id || selectedReport.species_id}</div>
+                      </div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>None specified</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'block' }}>
+                    Reporter Contact
+                  </label>
+                  <div className="form-control" style={{ background: 'var(--bg-primary)' }}>
+                    {selectedReport.email ? (
+                      <div style={{ fontWeight: 500, wordBreak: 'break-all' }}>{selectedReport.email}</div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>Anonymous user</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'block' }}>
+                  Status
+                </label>
+                <select
+                  className="form-control"
+                  value={selectedReport.status}
+                  onChange={(e) => {
+                    const newStatus = e.target.value;
+                    setSelectedReport(prev => ({ ...prev, status: newStatus }));
+                    updateStatus(selectedReport.id, newStatus);
+                  }}
+                  style={{
+                    fontWeight: 600,
+                    color: selectedReport.status === 'open' ? '#f9a825' : selectedReport.status === 'in_progress' ? '#0066cc' : '#2d8a4e',
+                  }}
+                >
+                  <option value="open">Open</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="resolved">Resolved</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid var(--border-color)' }}>
+              <button className="btn btn-secondary" onClick={() => setSelectedReport(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function NoticeManagerTab() {
+  const [form, setForm] = useState({ title: '', message: '', style: 'info', is_active: false, starts_at: '', ends_at: '', dismissible: true });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const messageRef = useRef(null);
+
+  useEffect(() => {
+    noticeAPI.getAdmin().then((res) => {
+      const notice = res.data;
+      if (!notice) return;
+      const toInput = (value) => value ? new Date(value).toISOString().slice(0, 16) : '';
+      setForm({
+        title: notice.title || '',
+        message: notice.message || '',
+        style: notice.style || 'info',
+        is_active: Boolean(notice.is_active),
+        starts_at: toInput(notice.starts_at),
+        ends_at: toInput(notice.ends_at),
+        dismissible: notice.dismissible !== false,
+      });
+    }).finally(() => setLoading(false));
+  }, []);
+
+  const updateField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+
+  const formatMessage = (tag, attributes = '') => {
+    const textarea = messageRef.current;
+    const start = textarea?.selectionStart ?? form.message.length;
+    const end = textarea?.selectionEnd ?? start;
+    const selected = form.message.slice(start, end) || 'text';
+    const replacement = `<${tag}${attributes}>${selected}</${tag}>`;
+    const message = `${form.message.slice(0, start)}${replacement}${form.message.slice(end)}`;
+    updateField('message', message);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(start, start + replacement.length);
+    });
+  };
+
+  const handleSave = async (event) => {
+    event.preventDefault();
+    if (!form.message.trim()) {
+      alert('Notice message is required.');
+      return;
+    }
+    setSaving(true);
+    try {
+      await noticeAPI.update({
+        ...form,
+        title: form.title.trim() || null,
+        message: form.message.trim(),
+        starts_at: form.starts_at ? new Date(form.starts_at).toISOString() : null,
+        ends_at: form.ends_at ? new Date(form.ends_at).toISOString() : null,
+      });
+      alert('Site notice saved.');
+    } catch (err) {
+      alert(err.message || 'Failed to save site notice.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <LoadingSpinner />;
+
+  return (
+    <section>
+      <h2 style={{ fontSize: '24px', fontWeight: 700, marginBottom: '6px' }}>Site Notice</h2>
+      <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+        Show an optional notice below the public navigation bar. Only administrators can edit it.
+      </p>
+      <form onSubmit={handleSave} style={{ maxWidth: '720px', display: 'grid', gap: '16px' }}>
+        <label><span className="form-label">Title (optional)</span><input className="form-control" value={form.title} onChange={(e) => updateField('title', e.target.value)} maxLength={255} /></label>
+        <label>
+          <span className="form-label">Message (rich text or HTML)</span>
+          <div className="site-notice-editor-toolbar" aria-label="Message formatting">
+            <button type="button" onClick={() => formatMessage('strong')}><strong>B</strong></button>
+            <button type="button" onClick={() => formatMessage('em')}><em>I</em></button>
+            <button type="button" onClick={() => formatMessage('u')}><u>U</u></button>
+            <button type="button" onClick={() => formatMessage('a', ' href="https://"')}>Link</button>
+            <button type="button" onClick={() => formatMessage('ul')}>&bull; List</button>
+          </div>
+          <textarea ref={messageRef} className="form-control" value={form.message} onChange={(e) => updateField('message', e.target.value)} maxLength={2000} rows={6} required />
+          <small style={{ color: 'var(--text-secondary)' }}>Allowed formatting: bold, italic, underline, links, paragraphs, and lists. Unsafe HTML is removed when saved.</small>
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+          <label><span className="form-label">Style</span><select className="form-control" value={form.style} onChange={(e) => updateField('style', e.target.value)}><option value="info">Informational</option><option value="warning">Warning</option><option value="success">Success</option><option value="urgent">Urgent</option></select></label>
+          <label><span className="form-label">Starts (optional)</span><input className="form-control" type="datetime-local" value={form.starts_at} onChange={(e) => updateField('starts_at', e.target.value)} /></label>
+          <label><span className="form-label">Ends (optional)</span><input className="form-control" type="datetime-local" value={form.ends_at} onChange={(e) => updateField('ends_at', e.target.value)} /></label>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><input type="checkbox" checked={form.is_active} onChange={(e) => updateField('is_active', e.target.checked)} /> Show notice when active and within schedule</label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}><input type="checkbox" checked={form.dismissible} onChange={(e) => updateField('dismissible', e.target.checked)} /> Allow visitors to dismiss the notice</label>
+        <button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Notice'}</button>
+      </form>
+    </section>
   );
 }
 
@@ -1574,6 +1850,33 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
     }));
   };
 
+  const [nameExists, setNameExists] = useState(false);
+  const [checkingName, setCheckingName] = useState(false);
+
+  useEffect(() => {
+    if (editingId) return; // Do not check when editing an existing species
+    const name = formData.scientific_name?.trim();
+    if (!name) {
+      setNameExists(false);
+      setCheckingName(false);
+      return;
+    }
+
+    setCheckingName(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await speciesAPI.checkName(name);
+        setNameExists(res.exists);
+      } catch {
+        setNameExists(false);
+      } finally {
+        setCheckingName(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [formData.scientific_name, editingId]);
+
   return (
     <div
       style={{
@@ -1607,8 +1910,19 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
             value={formData.scientific_name}
             onChange={(e) => updateField('scientific_name', e.target.value)}
             placeholder="e.g. Panthera tigris"
-            style={{ fontStyle: 'italic' }}
+            style={{ fontStyle: 'italic', borderColor: nameExists ? '#dc3545' : undefined }}
           />
+          {checkingName && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>Checking availability...</div>}
+          {nameExists && !checkingName && (
+            <div style={{ fontSize: '12px', color: '#dc3545', marginTop: '4px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+              This scientific name already exists in the database.
+            </div>
+          )}
         </div>
 
         <div className="form-row">
@@ -1659,8 +1973,24 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
               <option value="exotic">Exotic (Non-native)</option>
             </select>
           </div>
+        </div>
+        <div className="form-group">
+          <label htmlFor="form-residency">Residency Status</label>
+          <select
+            id="form-residency"
+            className="form-control"
+            value={formData.residency_status}
+            onChange={(e) => updateField('residency_status', e.target.value)}
+          >
+            <option value="resident">Resident</option>
+            <option value="migratory">Migratory</option>
+            <option value="summer_visitor">Summer Visitor</option>
+            <option value="vagrant">Vagrant</option>
+          </select>
+        </div>
+        <div className="form-row">
           <div className="form-group">
-            <label htmlFor="form-conservation">Conservation Status</label>
+            <label htmlFor="form-conservation">Global Conservation Status</label>
             <select
               id="form-conservation"
               className="form-control"
@@ -1681,18 +2011,30 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
             </select>
           </div>
           <div className="form-group">
-            <label htmlFor="form-residency">Residency Status</label>
-            <select
-              id="form-residency"
-              className="form-control"
-              value={formData.residency_status}
-              onChange={(e) => updateField('residency_status', e.target.value)}
-            >
-              <option value="resident">Resident</option>
-              <option value="migratory">Migratory</option>
-              <option value="summer_visitor">Summer Visitor</option>
-              <option value="vagrant">Vagrant</option>
+            <label htmlFor="form-global-status-year">Global assessment year</label>
+            <input id="form-global-status-year" className="form-control" type="number" min="1000" max="2100" value={formData.conservation_status_year} onChange={(e) => updateField('conservation_status_year', e.target.value)} placeholder="e.g. 2022" />
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="form-bd-conservation">Bangladesh Conservation Status</label>
+            <select id="form-bd-conservation" className="form-control" value={formData.bd_conservation_status} onChange={(e) => updateField('bd_conservation_status', e.target.value)}>
+              <option value="">Not assessed</option>
+              <option value="NE">NE — Not Evaluated</option>
+              <option value="DD">DD — Data Deficient</option>
+              <option value="LC">LC — Least Concern</option>
+              <option value="NT">NT — Near Threatened</option>
+              <option value="VU">VU — Vulnerable</option>
+              <option value="EN">EN — Endangered</option>
+              <option value="CR">CR — Critically Endangered</option>
+              <option value="RE">RE — Regionally Extinct</option>
+              <option value="EW">EW — Extinct in the Wild</option>
+              <option value="EX">EX — Extinct</option>
             </select>
+          </div>
+          <div className="form-group">
+            <label htmlFor="form-bd-status-year">Bangladesh Assessment Year</label>
+            <input id="form-bd-status-year" className="form-control" type="number" min="1000" max="2100" value={formData.bd_conservation_status_year} onChange={(e) => updateField('bd_conservation_status_year', e.target.value)} placeholder="e.g. 2015" />
           </div>
         </div>
 
@@ -1754,6 +2096,22 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
             <div style={{ flex: 1 }}>
               <label>EOL URL</label>
               <input type="url" className="form-control" value={formData.external_links?.eol || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, eol: e.target.value })} placeholder="https://eol.org/pages/..." />
+            </div>
+          </div>
+          <div className="form-row" style={{ marginTop: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <label>POWO URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.powo || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, powo: e.target.value })} placeholder="https://powo.science.kew.org/taxon/..." />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>WFO URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.wfo || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, wfo: e.target.value })} placeholder="https://www.worldfloraonline.org/taxon/..." />
+            </div>
+          </div>
+          <div className="form-row" style={{ marginTop: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <label>Barcode of Life (BOLD) URL</label>
+              <input type="url" className="form-control" value={formData.external_links?.bold || ''} onChange={(e) => updateField('external_links', { ...formData.external_links, bold: e.target.value })} placeholder="https://boldsystems.org/index.php/TaxBrowser_TaxonPage?taxid=..." />
             </div>
           </div>
         </div>
@@ -1879,6 +2237,16 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
               <input id="form-genus" className="form-control" value={formData.taxonomy.genus} onChange={(e) => updateTaxonomy('genus', e.target.value)} placeholder="e.g. Panthera" />
             </div>
           </div>
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="form-taxonomic-authority">Taxonomic authority</label>
+              <input id="form-taxonomic-authority" className="form-control" value={formData.taxonomy.taxonomic_authority} onChange={(e) => updateTaxonomy('taxonomic_authority', e.target.value)} placeholder="e.g. Hodgson" />
+            </div>
+            <div className="form-group">
+              <label htmlFor="form-authority-year">Authority year</label>
+              <input id="form-authority-year" className="form-control" type="number" min="1000" max="2100" value={formData.taxonomy.authority_year} onChange={(e) => updateTaxonomy('authority_year', e.target.value)} placeholder="e.g. 1845" />
+            </div>
+          </div>
         </div>
 
         {/* Location coordinates (JSON) */}
@@ -1927,26 +2295,36 @@ function SpeciesFormModal({ formData, setFormData, pendingImages, setPendingImag
                 try {
                   setEnriching(true);
                   await speciesAPI.enrich(editingId);
-                  const res = await speciesAPI.getById(editingId);
+                  const res = await speciesAPI.getPreview(editingId);
                   const s = res.data || {};
-                  setFormData((prev) => ({
-                    ...prev,
-                    description: s.description || prev.description,
-                    habitat: s.habitat || prev.habitat,
-                    location_coordinates: s.location_coordinates || prev.location_coordinates,
-                    conservation_status: s.conservation_status || prev.conservation_status,
-                    taxonomy: s.taxonomy || prev.taxonomy,
-                    external_links: Object.keys(s.external_links || {}).length > 0 ? s.external_links : prev.external_links,
-                  }));
+                  setFormData((prev) => {
+                    const newTaxonomy = { ...prev.taxonomy };
+                    if (s.taxonomy) {
+                      ['kingdom', 'phylum', 'class', 'order', 'family', 'genus'].forEach(level => {
+                        if (s.taxonomy[level]) newTaxonomy[level] = s.taxonomy[level];
+                      });
+                    }
+                    return {
+                      ...prev,
+                      description: s.description || prev.description,
+                      habitat: s.habitat || prev.habitat,
+                      location_coordinates: (s.location_coordinates && s.location_coordinates.length > 0) ? s.location_coordinates : prev.location_coordinates,
+                      conservation_status: s.conservation_status || prev.conservation_status,
+                      taxonomy: newTaxonomy,
+                      external_links: Object.keys(s.external_links || {}).length > 0 ? s.external_links : prev.external_links,
+                      references: s.references || prev.references,
+                    };
+                  });
 
                   const images = s.images || [];
                   const primary = images.find((img) => img.is_primary) || images[0];
-                  const additional = images.filter((img) => !img.is_primary).map((i) => i.image_url);
+                  const additional = images.filter((img) => !img.is_primary);
                   setFormData((prev) => ({
                     ...prev,
                     featured_image_url: primary?.image_url || prev.featured_image_url,
                     featured_image_credit: primary?.image_credit || prev.featured_image_credit,
-                    additional_image_urls: additional.length ? additional.join('\n') : prev.additional_image_urls,
+                    additional_image_urls: additional.length ? additional.map((i) => i.image_url).join('\n') : prev.additional_image_urls,
+                    additional_image_credits: additional.length ? additional.map((i) => i.image_credit || '').join('\n') : prev.additional_image_credits,
                   }));
 
                   try { window.dispatchEvent(new CustomEvent('ffdb:show-toast', { detail: { message: 'Enrichment applied', type: 'success' } })); } catch (e) {}
@@ -2018,15 +2396,6 @@ function Toast({ message, type }) {
       gap: '8px',
     }}>
       {message}
-    </div>
-  );
-}
-
-function LoadingSpinner() {
-  return (
-    <div className="loading">
-      <div className="spinner" />
-      <span className="loading-text">Loading...</span>
     </div>
   );
 }

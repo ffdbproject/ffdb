@@ -7,7 +7,6 @@ import SpeciesCard from '../components/SpeciesCard';
 export default function HomePage() {
   const [stats, setStats] = useState(null);
   const [recentSpecies, setRecentSpecies] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const homePageRef = useRef(null);
   const navigate = useNavigate();
@@ -58,7 +57,7 @@ export default function HomePage() {
     async function fetchData() {
       try {
         const [statsRes, speciesRes] = await Promise.all([
-          speciesAPI.getStats(),
+          speciesAPI.getStats({ scope: 'published' }),
           speciesAPI.getAll({ page: 1, limit: 8 }),
         ]);
         setStats(statsRes.data);
@@ -71,22 +70,6 @@ export default function HomePage() {
     }
     fetchData();
   }, []);
-
-  const handleSearch = (e) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="loading">
-        <div className="spinner"></div>
-        <span className="loading-text">Loading FFDB...</span>
-      </div>
-    );
-  }
 
   return (
     <div className="page-enter" id="home-page" ref={homePageRef}>
@@ -113,7 +96,7 @@ export default function HomePage() {
         <script type="application/ld+json">{JSON.stringify(webSiteJsonLd)}</script>
         <script type="application/ld+json">{JSON.stringify({ ...organizationJsonLd, logo: logoPath })}</script>
       </Helmet>
-      {/* Hero Section */}
+      {/* Hero Section — renders immediately on first paint for crawlers and users */}
       <section className="hero">
         <div className="hero-content">
           <h1>
@@ -123,10 +106,10 @@ export default function HomePage() {
           <p>
             Explore the rich biodiversity of Bangladesh, from iconic wildlife to native and exotic plants found across forests, rivers, and wetlands. A centralized, authoritative database for researchers, students, and conservationists.
           </p>
-          {stats && (
+          {stats ? (
             <div className="hero-stats">
               <div className="hero-stat">
-                <div className="number">{stats.total}</div>
+                <div className="number">{stats.published_count ?? stats.total}</div>
                 <div className="label">Total Species</div>
               </div>
               <div className="hero-stat">
@@ -138,36 +121,25 @@ export default function HomePage() {
                 <div className="label">Fauna</div>
               </div>
             </div>
+          ) : (
+            <div className="hero-stats" style={{ minHeight: '60px' }}></div>
           )}
         </div>
       </section>
 
-      {/* Search Bar */}
       <div className="container">
-        <div className="search-hero">
-          <form onSubmit={handleSearch}>
-            <div className="search-bar-wrap">
-              <input
-                type="text"
-                placeholder="Search by scientific name, English name, or বাংলা নাম..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                id="home-search-input"
-              />
-              <button type="submit" className="search-bar-btn" id="home-search-btn">
-                Search
-              </button>
-            </div>
-          </form>
-        </div>
-
         {/* Recent Species */}
         <div className="section-header">
           <h2>Recently Added Species</h2>
           <a href="/species">View All</a>
         </div>
 
-        {recentSpecies.length > 0 ? (
+        {loading ? (
+          <div className="loading" style={{ padding: '60px 0' }}>
+            <div className="spinner"></div>
+            <span className="loading-text">Loading species...</span>
+          </div>
+        ) : recentSpecies.length > 0 ? (
           <div className="species-grid">
             {recentSpecies.map((sp, i) => (
               <SpeciesCard key={sp.id} species={sp} index={i} />

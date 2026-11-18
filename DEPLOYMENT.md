@@ -53,11 +53,11 @@ This grants your user `SELECT`, `INSERT`, `UPDATE`, and `DELETE` permissions on 
 If your cPanel SQL editor complains about `SELECT COUNT(*) AS total FROM (...)`, it is wrapping the pasted text as a query preview. In that case, paste and run these statements one at a time instead:
 
 ```sql
-GRANT USAGE ON SCHEMA public TO "creativ5_ffdb_userr";
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "creativ5_ffdb_userr";
-GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO "creativ5_ffdb_userr";
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "creativ5_ffdb_userr";
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "creativ5_ffdb_userr";
+GRANT USAGE ON SCHEMA public TO "your_db_user";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "your_db_user";
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO "your_db_user";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "your_db_user";
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "your_db_user";
 ```
 
 **If you skip this step**, create/update/delete operations can fail with "permission denied" errors.
@@ -110,9 +110,9 @@ NODE_ENV=production
 
 DB_HOST=localhost
 DB_PORT=5432
-DB_USER=creativ5_ffdb_userr
-DB_PASSWORD=@8xiUA.[m2r=olsW
-DB_NAME=creativ5_ffdb
+DB_USER=your_db_user
+DB_PASSWORD=your_strong_db_password
+DB_NAME=your_db_name
 
 CORS_ORIGIN=https://yourdomain.com,https://www.yourdomain.com
 
@@ -247,7 +247,7 @@ Check:
 - `npm install --production` was run inside `backend`
 - there is no extra `package.json` at the wrong level that points to `src/server.js` from the wrong directory
 
-If cPanel is trying to run `/home/creativ5/test.hwbd.org/ffdb/src/server.js`, move the application root to `/home/creativ5/test.hwbd.org/ffdb/backend` and restart the app.
+If cPanel is trying to run `/home/username/yourdomain.com/ffdb/src/server.js`, move the application root to `/home/username/yourdomain.com/ffdb/backend` and restart the app.
 
 ### Main domain shows `{"success":false,"message":"Route not found: GET /"}`
 
@@ -263,7 +263,7 @@ Check:
 
 If `NODE_ENV` is missing or not set to `production`, the backend will answer `/` with the JSON 404 from `notFoundHandler` instead of serving the frontend.
 
-### cPanel says "Can't acquire lock for app: test.hwbd.org/ffdb/backend"
+### cPanel says "Can't acquire lock for app: yourdomain.com/ffdb/backend"
 
 This means cPanel already has a Node.js app instance attached to that same root, or the app is still registered under a conflicting path.
 

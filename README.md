@@ -9,7 +9,7 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 
-[Live Site](https://ffdb.bd) · [API Docs](https://ffdb.bd/api-docs) · [Public Data Dump](https://ffdb.bd/api/public/data-dump?format=json) · [Contribute Data](https://ffdb.bd/contribute) · [Report Bug](https://github.com/ffdbproject/ffdb/issues)
+[Live Site](https://ffdb.bd) · [API Docs](https://ffdb.bd/api-docs) · [Public Data Dump](https://ffdb.bd/api/public/data-dump?format=csv) · [Contribute Data](https://ffdb.bd/contribute) · [Report Bug](https://github.com/ffdbproject/ffdb/issues)
 
 </div>
 

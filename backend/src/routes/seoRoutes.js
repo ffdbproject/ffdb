@@ -52,13 +52,13 @@ router.get('/sitemap.xml', async (req, res, next) => {
 
     while (hasMore) {
       const result = await pool.query(
-        `SELECT id, updated_at FROM species WHERE status = 'published' ORDER BY updated_at DESC LIMIT $1 OFFSET $2`,
+        `SELECT public_id, updated_at FROM species WHERE status = 'published' AND public_id IS NOT NULL ORDER BY updated_at DESC LIMIT $1 OFFSET $2`,
         [BATCH_SIZE, offset]
       );
 
       for (const row of result.rows) {
         res.write(`  <url>
-    <loc>${domain}/species/${row.id}</loc>
+    <loc>${domain}/species/${row.public_id}</loc>
     <lastmod>${new Date(row.updated_at).toISOString().split('T')[0]}</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>

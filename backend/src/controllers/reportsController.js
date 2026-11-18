@@ -6,6 +6,7 @@
 const { pool } = require('../config/db');
 const { isAdminAuthorized } = require('../utils/auth');
 const { normalizeOptionalString } = require('../utils/normalize');
+const { sendReportNotification } = require('../services/emailService');
 
 const VALID_STATUSES = ['open', 'in_progress', 'resolved'];
 
@@ -35,25 +36,25 @@ async function createReport(req, res, next) {
       });
     }
 
-    // Optional species_id (must be valid if provided)
+    // Optional species_id (supports public_id like 18 or string matching public_id/id)
     let cleanSpeciesId = null;
-    if (species_id) {
-      const parsed = parseInt(species_id, 10);
-      if (!Number.isInteger(parsed) || parsed <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'If provided, species_id must be a positive integer',
-        });
-      }
-      // Check if species exists
-      const speciesExists = await pool.query('SELECT id FROM species WHERE id = $1', [parsed]);
+    if (species_id !== undefined && species_id !== null && String(species_id).trim() !== '') {
+      const inputStr = String(species_id).trim();
+      const parsedNum = parseInt(inputStr, 10);
+
+      // Check if species exists by public_id or internal id
+      const queryStr = Number.isInteger(parsedNum)
+        ? 'SELECT id, public_id FROM species WHERE public_id = $1 OR id = $1 LIMIT 1'
+        : 'SELECT id, public_id FROM species WHERE public_id = $1 LIMIT 1';
+
+      const speciesExists = await pool.query(queryStr, [inputStr]);
       if (speciesExists.rows.length === 0) {
         return res.status(400).json({
           success: false,
-          message: `Species with ID ${parsed} does not exist`,
+          message: `Species with ID "${inputStr}" does not exist`,
         });
       }
-      cleanSpeciesId = parsed;
+      cleanSpeciesId = speciesExists.rows[0].id;
     }
 
     // Optional email (basic validation)
@@ -80,6 +81,9 @@ async function createReport(req, res, next) {
     const report = result.rows[0];
 
     console.log(`[Reports] New report created: ID ${report.id}, title: "${report.title}"`);
+
+    // Send email notification (fire-and-forget)
+    sendReportNotification(report);
 
     res.status(201).json({
       success: true,
@@ -137,8 +141,10 @@ async function listReports(req, res, next) {
         r.title,
         r.description,
         r.species_id,
+        s.public_id,
         s.scientific_name,
         s.english_name,
+        s.bengali_name,
         r.email,
         r.status,
         r.created_at,

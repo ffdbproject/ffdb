@@ -79,20 +79,58 @@ const loginLimiter = rateLimit({
 });
 
 /**
+ * Check if the request originates from the trusted site frontend or an authenticated admin session.
+ */
+function isInternalRequest(req) {
+  // Check Origin or Referer header against allowed site domain / CORS origins
+  const origin = req.get('origin') || '';
+  const referer = req.get('referer') || '';
+  const host = req.get('host') || '';
+
+  const siteOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
+    : [];
+
+  // Also include current host if present
+  if (host) {
+    siteOrigins.push(`https://${host}`, `http://${host}`);
+  }
+  siteOrigins.push('https://ffdb.bd', 'http://localhost:5173', 'http://localhost:5000');
+
+  const matchesSite = siteOrigins.some(so => {
+    try {
+      const targetHost = new URL(so).host;
+      if (origin && new URL(origin).host === targetHost) return true;
+      if (referer && new URL(referer).host === targetHost) return true;
+    } catch {
+      /* ignore invalid URLs */
+    }
+    return false;
+  });
+
+  if (matchesSite) return true;
+
+  // Check if request has admin token cookie
+  if (req.cookies && req.cookies.admin_token) return true;
+
+  return false;
+}
+
+/**
  * Rate limiter for external/public API access.
- * Allows 100 requests per hour per IP.
- * Applied to /api/species and /api/search for cross-origin requests.
+ * Allows 500 requests per hour per IP for external consumers.
+ * Internal frontend requests (ffdb.bd) and search engine bots bypass this limit.
  * Includes standard rate-limit headers so consumers know their remaining quota.
  */
 const publicApiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 100, // 100 requests per hour per IP
-  skip: skipBots, // Still skip for search engine bots
+  max: 500, // Increased to 500 requests per hour per IP for researchers
+  skip: (req, res) => isInternalRequest(req) || skipBots(req, res), // Skip for internal site & bots
   standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
   legacyHeaders: false,
   message: {
     success: false,
-    message: 'API rate limit exceeded. You are allowed 100 requests per hour. Please try again later.',
+    message: 'API rate limit exceeded. External users are allowed 500 requests per hour. For bulk dataset access, use the public data dump at /api/public/data-dump.',
   },
 });
 

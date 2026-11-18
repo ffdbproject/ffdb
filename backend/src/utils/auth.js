@@ -7,7 +7,16 @@
 // controllers to ensure consistent security behaviour.
 // ============================================================
 
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+
+function safeCompare(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 /**
  * Resolve JWT secret with consistent fallback chain.
@@ -52,7 +61,7 @@ function isAdminAuthorized(req) {
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7).trim();
-    if (apiKey && token === apiKey) return true;
+    if (apiKey && safeCompare(token, apiKey)) return true;
   }
 
   // 2) If an HttpOnly admin cookie is present, verify the JWT
@@ -72,4 +81,28 @@ function isAdminAuthorized(req) {
   return false;
 }
 
-module.exports = { getJWTSecret, jwtSecret, isAdminAuthorized };
+/**
+ * Extracts user info from the request (token or dev fallback) without blocking.
+ * Used for public routes that need to alter behavior if the user is logged in.
+ */
+function getUserFromRequest(req) {
+  const token = req.cookies?.admin_token;
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, jwtSecret);
+      return decoded;
+    } catch (e) {
+      return null;
+    }
+  }
+  
+  // Dev mode fallback
+  const apiKey = process.env.ADMIN_API_KEY;
+  if (!apiKey && process.env.NODE_ENV !== 'production') {
+    return { role: 'admin' };
+  }
+  
+  return null;
+}
+
+module.exports = { getJWTSecret, jwtSecret, isAdminAuthorized, getUserFromRequest };

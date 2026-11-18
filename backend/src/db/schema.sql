@@ -26,9 +26,13 @@ CREATE TABLE IF NOT EXISTS species (
     origin          VARCHAR(20) DEFAULT 'native'
                     CHECK (origin IN ('native', 'exotic')),  -- Native to Bangladesh or Exotic
     conservation_status VARCHAR(50),          -- e.g., LC, NT, VU, EN, CR, EW, EX
+    conservation_status_year INTEGER,
+    bd_conservation_status VARCHAR(50),
+    bd_conservation_status_year INTEGER,
     location_coordinates JSONB DEFAULT '[]',  -- Array of {lat, lng, label?} objects
     status          VARCHAR(20) NOT NULL DEFAULT 'draft'
                     CHECK (status IN ('draft', 'pending_review', 'published')),
+    published_at    TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT species_scientific_name_key UNIQUE (scientific_name)
@@ -45,6 +49,7 @@ CREATE INDEX idx_species_category        ON species (category);
 CREATE INDEX idx_species_status          ON species (status);
 CREATE INDEX idx_species_conservation    ON species (conservation_status);
 CREATE INDEX idx_species_created_at      ON species (created_at DESC);
+CREATE INDEX idx_species_published_at    ON species (published_at DESC);
 CREATE INDEX idx_species_public_id       ON species (public_id) WHERE public_id IS NOT NULL;
 
 
@@ -62,6 +67,8 @@ CREATE TABLE IF NOT EXISTS taxonomy (
     "order"    VARCHAR(100),               -- "order" is a reserved keyword in SQL
     family     VARCHAR(100),
     genus      VARCHAR(100),
+    taxonomic_authority VARCHAR(255),
+    authority_year INTEGER,
 
     CONSTRAINT fk_taxonomy_species
         FOREIGN KEY (species_id)
@@ -169,6 +176,26 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE INDEX idx_reports_status        ON reports (status);
 CREATE INDEX idx_reports_species_id    ON reports (species_id);
 CREATE INDEX idx_reports_created_at    ON reports (created_at DESC);
+
+
+-- ============================================================
+-- 7. SITE NOTICE
+-- One administrator-managed notice shown below the public header.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS site_notice (
+    id          INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    title       VARCHAR(255),
+    message     TEXT NOT NULL DEFAULT '',
+    style       VARCHAR(20) NOT NULL DEFAULT 'info'
+                CHECK (style IN ('info', 'warning', 'success', 'urgent')),
+    is_active   BOOLEAN NOT NULL DEFAULT FALSE,
+    starts_at   TIMESTAMPTZ,
+    ends_at     TIMESTAMPTZ,
+    dismissible BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO site_notice (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 
 
 -- ============================================================

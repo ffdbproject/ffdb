@@ -63,6 +63,8 @@ function injectSpeciesMetaIntoHtml(templateHtml, meta) {
     organizationJsonLd,
     jsonLd,
     breadcrumbJsonLd,
+    articleJsonLd,
+    bodyHtml,
   } = meta;
 
   const safePageTitle = escapeHtml(pageTitle);
@@ -73,42 +75,47 @@ function injectSpeciesMetaIntoHtml(templateHtml, meta) {
   const safeImageUrl = escapeHtml(imageUrl || fallbackImageUrl || '');
 
   const injectedHead = `
-    <title>${safePageTitle}</title>
-    <meta name="description" content="${safeDescription}">
-    <meta property="og:title" content="${safeSocialTitle}">
-    <meta property="og:description" content="${safeDescription}">
-    <meta property="og:type" content="article">
-    <meta property="og:url" content="${safeCanonicalUrl}">
-    <meta property="og:site_name" content="FFDB">
-    <meta property="og:image" content="${safeImageUrl}">
-    <meta property="og:image:alt" content="${safeDisplayName}">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="${safeSocialTitle}">
-    <meta name="twitter:description" content="${safeDescription}">
-    <meta name="twitter:image" content="${safeImageUrl}">
-    <meta name="twitter:image:alt" content="${safeDisplayName}">
-    <meta name="twitter:image:width" content="1024">
-    <meta name="twitter:image:height" content="512">
-    <link rel="canonical" href="${safeCanonicalUrl}">
-    <script type="application/ld+json">${safeJsonLdString(pageJsonLd)}</script>
-    <script type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
-    <script type="application/ld+json">${safeJsonLdString(jsonLd)}</script>
-    <script type="application/ld+json">${safeJsonLdString(breadcrumbJsonLd)}</script>
+    <title data-server-rendered="true">${safePageTitle}</title>
+    <meta data-server-rendered="true" name="description" content="${safeDescription}">
+    <meta data-server-rendered="true" property="og:title" content="${safeSocialTitle}">
+    <meta data-server-rendered="true" property="og:description" content="${safeDescription}">
+    <meta data-server-rendered="true" property="og:type" content="article">
+    <meta data-server-rendered="true" property="og:url" content="${safeCanonicalUrl}">
+    <meta data-server-rendered="true" property="og:site_name" content="FFDB">
+    <meta data-server-rendered="true" property="og:image" content="${safeImageUrl}">
+    <meta data-server-rendered="true" property="og:image:alt" content="${safeDisplayName}">
+    <meta data-server-rendered="true" property="og:image:width" content="1200">
+    <meta data-server-rendered="true" property="og:image:height" content="630">
+    <meta data-server-rendered="true" name="twitter:card" content="summary_large_image">
+    <meta data-server-rendered="true" name="twitter:title" content="${safeSocialTitle}">
+    <meta data-server-rendered="true" name="twitter:description" content="${safeDescription}">
+    <meta data-server-rendered="true" name="twitter:image" content="${safeImageUrl}">
+    <meta data-server-rendered="true" name="twitter:image:alt" content="${safeDisplayName}">
+    <meta data-server-rendered="true" name="twitter:image:width" content="1024">
+    <meta data-server-rendered="true" name="twitter:image:height" content="512">
+    <link data-server-rendered="true" rel="canonical" href="${safeCanonicalUrl}">
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(pageJsonLd)}</script>
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(jsonLd)}</script>
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(breadcrumbJsonLd)}</script>
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(articleJsonLd)}</script>
   `.trim();
 
   // Remove fallback SEO tags from the SPA shell to avoid duplicate OG/Twitter values.
-  const sanitized = templateHtml
+  let sanitized = templateHtml
+    .replace(/<title[^>]*>[\s\S]*?<\/title>\s*/gi, '')
     .replace(/<meta[^>]+property=["']og:[^"']+["'][^>]*>\s*/gi, '')
     .replace(/<meta[^>]+name=["']twitter:[^"']+["'][^>]*>\s*/gi, '')
     .replace(/<meta[^>]+name=["']description["'][^>]*>\s*/gi, '')
     .replace(/<link[^>]+rel=["']canonical["'][^>]*>\s*/gi, '')
     .replace(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
 
+  if (bodyHtml) {
+    sanitized = sanitized.replace(/<div\s+id=["']root["']\s*>\s*<\/div>/i, `<div id="root">\n${bodyHtml}\n</div>`);
+  }
+
   // Replace default title and inject fresh species metadata before closing head.
-  const withTitle = sanitized.replace(/<title[^>]*>[\s\S]*?<\/title>/i, `<title>${safePageTitle}</title>`);
-  return withTitle.replace('</head>', `${injectedHead}\n</head>`);
+  return sanitized.replace('</head>', `${injectedHead}\n</head>`);
 }
 
 function injectStaticPageMetaIntoHtml(templateHtml, meta) {
@@ -118,6 +125,7 @@ function injectStaticPageMetaIntoHtml(templateHtml, meta) {
     canonicalUrl,
     pageJsonLd,
     organizationJsonLd,
+    noindex,
   } = meta;
 
   const safePageTitle = escapeHtml(pageTitle);
@@ -125,30 +133,31 @@ function injectStaticPageMetaIntoHtml(templateHtml, meta) {
   const safeCanonicalUrl = escapeHtml(canonicalUrl);
 
   const injectedHead = `
-    <title>${safePageTitle}</title>
-    <meta name="description" content="${safeDescription}">
-    <meta property="og:title" content="${safePageTitle}">
-    <meta property="og:site_name" content="FFDB">
-    <meta property="og:description" content="${safeDescription}">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="${safeCanonicalUrl}">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="${safePageTitle}">
-    <meta name="twitter:description" content="${safeDescription}">
-    <link rel="canonical" href="${safeCanonicalUrl}">
-    <script type="application/ld+json">${safeJsonLdString(pageJsonLd)}</script>
-    <script type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
+    <title data-server-rendered="true">${safePageTitle}</title>
+    <meta data-server-rendered="true" name="description" content="${safeDescription}">
+    <meta data-server-rendered="true" property="og:title" content="${safePageTitle}">
+    <meta data-server-rendered="true" property="og:site_name" content="FFDB">
+    <meta data-server-rendered="true" property="og:description" content="${safeDescription}">
+    <meta data-server-rendered="true" property="og:type" content="website">
+    <meta data-server-rendered="true" property="og:url" content="${safeCanonicalUrl}">
+    <meta data-server-rendered="true" name="twitter:card" content="summary_large_image">
+    <meta data-server-rendered="true" name="twitter:title" content="${safePageTitle}">
+    <meta data-server-rendered="true" name="twitter:description" content="${safeDescription}">
+    <link data-server-rendered="true" rel="canonical" href="${safeCanonicalUrl}">
+    ${noindex ? '<meta data-server-rendered="true" name="robots" content="noindex, follow">' : ''}
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(pageJsonLd)}</script>
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
   `.trim();
 
   const sanitized = templateHtml
+    .replace(/<title[^>]*>[\s\S]*?<\/title>/i, '')
     .replace(/<meta[^>]+property=["']og:[^"']+["'][^>]*>\s*/gi, '')
     .replace(/<meta[^>]+name=["']twitter:[^"']+["'][^>]*>\s*/gi, '')
     .replace(/<meta[^>]+name=["']description["'][^>]*>\s*/gi, '')
     .replace(/<link[^>]+rel=["']canonical["'][^>]*>\s*/gi, '')
     .replace(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
 
-  const withTitle = sanitized.replace(/<title[^>]*>[\s\S]*?<\/title>/i, `<title>${safePageTitle}</title>`);
-  return withTitle.replace('</head>', `${injectedHead}\n</head>`);
+  return sanitized.replace('</head>', `${injectedHead}\n</head>`);
 }
 
 async function prerenderMiddleware(req, res, next) {
@@ -201,13 +210,23 @@ async function prerenderMiddleware(req, res, next) {
 
 function getStaticPageMeta(req) {
   const domain = getPublicOrigin(req);
-  const canonicalUrl = `${domain}${req.originalUrl || req.path}`;
+  // Always use req.path (never req.originalUrl) so query strings like
+  // ?category=flora&page=2 are excluded from the canonical URL.
+  const canonicalUrl = `${domain}${req.path}`;
 
   if (req.path === '/species') {
+    // Filtered/paginated variants should not be indexed as separate pages.
+    const q = req.query || {};
+    const hasFilters = !!(
+      (q.page && parseInt(q.page, 10) > 1) ||
+      q.category || q.origin || q.residency_status || q.conservation_status ||
+      q.kingdom || q.phylum || q.class || q.order || q.family || q.genus
+    );
     return {
       pageTitle: 'Browse Species - FFDB',
-      description: 'Browse the complete catalog of flora and fauna species in Bangladesh.',
-      canonicalUrl,
+      description: 'Browse the complete catalog of flora and fauna species in Bangladesh. Filter by category and conservation status.',
+      canonicalUrl: `${domain}/species`,
+      noindex: hasFilters,
       pageJsonLd: {
         '@context': 'https://schema.org',
         '@type': 'CollectionPage',
@@ -320,6 +339,9 @@ async function generateSpeciesHtml(id, req) {
       s.description,
       s.habitat,
       s.conservation_status,
+      s.category,
+      s.created_at,
+      s.updated_at,
       t.kingdom, t.phylum, t.class, t."order", t.family, t.genus,
       i.image_url
     FROM species s
@@ -334,7 +356,16 @@ async function generateSpeciesHtml(id, req) {
   }
 
   const s = result.rows[0];
-  const displayName = s.english_name || s.bengali_name || s.scientific_name;
+  let displayName = '';
+  if (s.english_name && s.bengali_name) {
+    displayName = `${s.english_name} (${s.bengali_name})`;
+  } else if (s.english_name) {
+    displayName = s.english_name;
+  } else if (s.bengali_name) {
+    displayName = s.bengali_name;
+  } else {
+    displayName = s.scientific_name || `Species ${id}`;
+  }
   const domain = getPublicOrigin(req);
   const imageUrl = resolvePublicImageUrl(s.image_url, domain);
   const fallbackImageUrl = `${domain}/og-fallback.png`;
@@ -425,9 +456,86 @@ async function generateSpeciesHtml(id, req) {
     ],
   };
 
+  // Article schema for Google Rich Results
+  const articleJsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'Article',
+    headline: `${displayName} - FFDB`,
+    name: schemaName,
+    description: descriptionSnippet,
+    url: `${domain}/species/${id}`,
+    mainEntityOfPage: {
+      '@type': 'WebPage',
+      '@id': `${domain}/species/${id}`,
+    },
+    image: socialImageUrl ? [socialImageUrl] : undefined,
+    author: {
+      '@type': 'Organization',
+      name: 'FFDB',
+      url: `${domain}/`,
+    },
+    publisher: {
+      '@type': 'Organization',
+      name: 'Flora and Fauna Database of Bangladesh',
+      logo: {
+        '@type': 'ImageObject',
+        url: `${domain}/logo.png`,
+      },
+    },
+    datePublished: s.created_at ? new Date(s.created_at).toISOString() : undefined,
+    dateModified: s.updated_at ? new Date(s.updated_at).toISOString() : (s.created_at ? new Date(s.created_at).toISOString() : undefined),
+    articleSection: s.category === 'flora' ? 'Flora' : (s.category === 'fauna' ? 'Fauna' : 'Species'),
+    keywords: [s.english_name, s.bengali_name, s.scientific_name, 'Bangladesh', 'biodiversity'].filter(Boolean).join(', '),
+    about: {
+      '@type': 'Taxon',
+      name: s.scientific_name,
+    },
+  };
+
   const title = `${displayName} - FFDB`;
   const socialTitle = displayName;
   const canonicalUrl = `${domain}/species/${id}`;
+  const safeDisplayName = escapeHtml(displayName);
+
+  const bodyHtml = `
+    <div class="app">
+      <main>
+        <div class="page-enter container species-detail" id="species-detail-page">
+          <div class="species-breadcrumb">
+            <a href="/">Home</a> / <a href="/species">Species</a> / <span>${safeDisplayName}</span>
+          </div>
+          <div class="species-detail-header">
+            ${socialImageUrl ? `<div class="species-detail-image-wrap"><img alt="Photo of ${safeDisplayName}" src="${socialImageUrl}" style="width: 100%; height: auto; display: block;" /></div>` : ''}
+            <div class="species-detail-info">
+              <h1>${safeDisplayName}</h1>
+              ${s.bengali_name ? `<p class="species-detail-bengali">${escapeHtml(s.bengali_name)}</p>` : ''}
+              <p class="species-detail-scientific">${escapeHtml(s.scientific_name)}</p>
+              <div class="species-detail-badges">
+                <span class="species-card-category ${escapeHtml(s.category || '')}">${escapeHtml(s.category || 'Species')}</span>
+                ${s.conservation_status ? `<span class="conservation-badge ${escapeHtml(s.conservation_status.toLowerCase())}">${escapeHtml(s.conservation_status)}</span>` : ''}
+              </div>
+              ${plainDescription ? `<div class="species-detail-description">${escapeHtml(plainDescription)}</div>` : ''}
+              ${s.conservation_status ? `<div style="margin-bottom: 16px;"><strong style="font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Conservation Status</strong><p style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">${escapeHtml(s.conservation_status)}</p></div>` : ''}
+              ${s.habitat ? `<div style="margin-bottom: 20px;"><strong style="font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Habitat</strong><p style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">${escapeHtml(s.habitat)}</p></div>` : ''}
+            </div>
+          </div>
+          ${s.kingdom || s.phylum || s.class || s.order || s.family || s.genus ? `
+          <div class="section-header"><h2>Taxonomy</h2></div>
+          <table class="taxonomy-table" id="taxonomy-table">
+            <tbody>
+              ${s.kingdom ? `<tr><td>Kingdom</td><td>${escapeHtml(s.kingdom)}</td></tr>` : ''}
+              ${s.phylum ? `<tr><td>Phylum</td><td>${escapeHtml(s.phylum)}</td></tr>` : ''}
+              ${s.class ? `<tr><td>Class</td><td>${escapeHtml(s.class)}</td></tr>` : ''}
+              ${s.order ? `<tr><td>Order</td><td>${escapeHtml(s.order)}</td></tr>` : ''}
+              ${s.family ? `<tr><td>Family</td><td>${escapeHtml(s.family)}</td></tr>` : ''}
+              ${s.genus ? `<tr><td>Genus</td><td style="font-style: italic;">${escapeHtml(s.genus)}</td></tr>` : ''}
+              <tr><td>Species</td><td style="font-style: italic;">${escapeHtml(s.scientific_name)}</td></tr>
+            </tbody>
+          </table>` : ''}
+        </div>
+      </main>
+    </div>
+  `.trim();
 
   const template = await getIndexTemplate();
   return injectSpeciesMetaIntoHtml(template, {
@@ -442,6 +550,8 @@ async function generateSpeciesHtml(id, req) {
     organizationJsonLd,
     jsonLd,
     breadcrumbJsonLd,
+    articleJsonLd,
+    bodyHtml,
   });
 }
 
@@ -469,6 +579,25 @@ async function generateHomeHtml(req) {
     logo: `${domain}/logo.png`,
   };
 
+  const homeBodyHtml = `
+    <div class="app">
+      <main>
+        <div class="page-enter" id="home-page">
+          <section class="hero">
+            <div class="hero-content">
+              <h1>
+                Flora and Fauna Database of <span class="highlight">Bangladesh</span> (FFDB)
+              </h1>
+              <p>
+                Explore the rich biodiversity of Bangladesh, from iconic wildlife to native and exotic plants found across forests, rivers, and wetlands. A centralized, authoritative database for researchers, students, and conservationists.
+              </p>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  `.trim();
+
   const template = await getIndexTemplate();
 
   return injectHomeMetaIntoHtml(
@@ -483,6 +612,7 @@ async function generateHomeHtml(req) {
       displayName: 'Flora and Fauna Database of Bangladesh',
       websiteJsonLd,
       organizationJsonLd,
+      bodyHtml: homeBodyHtml,
     }
   );
 }
@@ -498,6 +628,7 @@ function injectHomeMetaIntoHtml(templateHtml, meta) {
     displayName,
     websiteJsonLd,
     organizationJsonLd,
+    bodyHtml,
   } = meta;
 
   const safeTitle = escapeHtml(title);
@@ -509,38 +640,42 @@ function injectHomeMetaIntoHtml(templateHtml, meta) {
   const safeDisplayName = escapeHtml(displayName || title);
 
   const injectedHead = `
-    <title>${safeTitle}</title>
-    <meta name="description" content="${safeDescription}">
-    <meta property="og:title" content="${safeSocialTitle}">
-    <meta property="og:site_name" content="FFDB">
-    <meta property="og:description" content="${safeSocialDescription}">
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="${safeCanonicalUrl}">
-    <meta property="og:image" content="${safeImageUrl}">
-    <meta property="og:image:alt" content="${safeDisplayName}">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="${safeSocialTitle}">
-    <meta name="twitter:description" content="${safeSocialDescription}">
-    <meta name="twitter:image" content="${safeImageUrl}">
-    <meta name="twitter:image:alt" content="${safeDisplayName}">
-    <meta name="twitter:image:width" content="1024">
-    <meta name="twitter:image:height" content="512">
-    <link rel="canonical" href="${safeCanonicalUrl}">
-    <script type="application/ld+json">${safeJsonLdString(websiteJsonLd)}</script>
-    <script type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
+    <title data-server-rendered="true">${safeTitle}</title>
+    <meta data-server-rendered="true" name="description" content="${safeDescription}">
+    <meta data-server-rendered="true" property="og:title" content="${safeSocialTitle}">
+    <meta data-server-rendered="true" property="og:site_name" content="FFDB">
+    <meta data-server-rendered="true" property="og:description" content="${safeSocialDescription}">
+    <meta data-server-rendered="true" property="og:type" content="website">
+    <meta data-server-rendered="true" property="og:url" content="${safeCanonicalUrl}">
+    <meta data-server-rendered="true" property="og:image" content="${safeImageUrl}">
+    <meta data-server-rendered="true" property="og:image:alt" content="${safeDisplayName}">
+    <meta data-server-rendered="true" property="og:image:width" content="1200">
+    <meta data-server-rendered="true" property="og:image:height" content="630">
+    <meta data-server-rendered="true" name="twitter:card" content="summary_large_image">
+    <meta data-server-rendered="true" name="twitter:title" content="${safeSocialTitle}">
+    <meta data-server-rendered="true" name="twitter:description" content="${safeSocialDescription}">
+    <meta data-server-rendered="true" name="twitter:image" content="${safeImageUrl}">
+    <meta data-server-rendered="true" name="twitter:image:alt" content="${safeDisplayName}">
+    <meta data-server-rendered="true" name="twitter:image:width" content="1024">
+    <meta data-server-rendered="true" name="twitter:image:height" content="512">
+    <link data-server-rendered="true" rel="canonical" href="${safeCanonicalUrl}">
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(websiteJsonLd)}</script>
+    <script data-server-rendered="true" type="application/ld+json">${safeJsonLdString(organizationJsonLd)}</script>
   `.trim();
 
-  const sanitized = templateHtml
+  let sanitized = templateHtml
+    .replace(/<title[^>]*>[\s\S]*?<\/title>\s*/gi, '')
     .replace(/<meta[^>]+property=["']og:[^"']+["'][^>]*>\s*/gi, '')
     .replace(/<meta[^>]+name=["']twitter:[^"']+["'][^>]*>\s*/gi, '')
     .replace(/<meta[^>]+name=["']description["'][^>]*>\s*/gi, '')
     .replace(/<link[^>]+rel=["']canonical["'][^>]*>\s*/gi, '')
     .replace(/<script[^>]+type=["']application\/ld\+json["'][^>]*>[\s\S]*?<\/script>\s*/gi, '');
 
-  const withTitle = sanitized.replace(/<title[^>]*>[\s\S]*?<\/title>/i, `<title>${safeTitle}</title>`);
-  return withTitle.replace('</head>', `${injectedHead}\n</head>`);
+  if (bodyHtml) {
+    sanitized = sanitized.replace(/<div\s+id=["']root["']\s*>\s*<\/div>/i, `<div id="root">\n${bodyHtml}\n</div>`);
+  }
+
+  return sanitized.replace('</head>', `${injectedHead}\n</head>`);
 }
 
 module.exports = prerenderMiddleware;

@@ -10,6 +10,58 @@ const { pool } = require('../config/db');
 const { enrichByScientificName } = require('../services/enrichmentService');
 const { normalizeImageUrl } = require('../utils/normalize');
 
+async function getEnrichmentData(id) {
+  if (!/^[0-9]+$/.test(id)) {
+    const error = new Error('Invalid species id');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const speciesResult = await pool.query(
+    'SELECT id, scientific_name FROM species WHERE id = $1',
+    [id]
+  );
+  if (speciesResult.rows.length === 0) {
+    const error = new Error(`Species ${id} not found`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const name = speciesResult.rows[0].scientific_name;
+  if (!name) {
+    const error = new Error('Species missing scientific_name, cannot enrich');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return enrichByScientificName(name);
+}
+
+async function previewSpeciesEnrichment(req, res) {
+  try {
+    const enriched = await getEnrichmentData(req.params.id);
+    res.json({
+      success: true,
+      data: {
+        description: enriched.description || null,
+        habitat: enriched.habitat || null,
+        references: enriched.references || null,
+        taxonomy: enriched.taxonomy || null,
+        external_links: enriched.external_links || {},
+        coords: Array.isArray(enriched.coords) ? enriched.coords.slice(0, 10) : [],
+        images: Array.isArray(enriched.images) ? enriched.images.slice(0, 8) : [],
+        sources: enriched.sources || [],
+      },
+    });
+  } catch (err) {
+    console.error('[Enrich] Preview failed:', err.message);
+    res.status(err.statusCode || 500).json({
+      success: false,
+      message: err.statusCode ? err.message : 'Enrichment preview failed',
+    });
+  }
+}
+
 async function enrichSpeciesById(req, res, next) {
   let client;
   try {
@@ -22,7 +74,7 @@ async function enrichSpeciesById(req, res, next) {
     }
 
     const spRes = await client.query(
-      'SELECT id, scientific_name, description, habitat, location_coordinates FROM species WHERE id = $1',
+      'SELECT id, scientific_name, description, habitat, "references", location_coordinates FROM species WHERE id = $1',
       [id]
     );
     if (spRes.rows.length === 0) {
@@ -65,6 +117,12 @@ async function enrichSpeciesById(req, res, next) {
       updates.habitat = enriched.habitat;
       await client.query('UPDATE species SET habitat = $1 WHERE id = $2', [enriched.habitat, id]);
       console.log('[Enrich] Added habitat');
+    }
+
+    if (enriched.references && (!species.references || species.references.trim() === '')) {
+      updates.references = true;
+      await client.query('UPDATE species SET "references" = $1 WHERE id = $2', [enriched.references, id]);
+      console.log('[Enrich] Added references');
     }
 
     if (enriched.taxonomy && typeof enriched.taxonomy === 'object') {
@@ -168,6 +226,7 @@ async function enrichSpeciesById(req, res, next) {
         description_added: Boolean(updates.description),
         habitat_added: Boolean(updates.habitat),
         taxonomy_added: Boolean(updates.taxonomy_added),
+        references_added: Boolean(updates.references),
         coords_added: updates.coords_added || 0,
         images_added: imagesAdded,
         sources: enriched.sources || [],
@@ -195,4 +254,4 @@ async function enrichSpeciesById(req, res, next) {
   }
 }
 
-module.exports = { enrichSpeciesById };
+module.exports = { enrichSpeciesById, previewSpeciesEnrichment };

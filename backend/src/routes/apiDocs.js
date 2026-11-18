@@ -21,13 +21,25 @@ router.get('/openapi.json', (req, res) => {
     openapi: '3.1.0',
     info: {
       title: 'FFDB API',
-      version: '1.0.0',
-      description: 'Public API for the Flora and Fauna Database of Bangladesh.',
+      version: '1.1.0',
+      description: 'Public API for the Flora and Fauna Database of Bangladesh. Species responses include global and Bangladesh conservation assessments, assessment years, and optional taxonomic authority metadata.',
     },
     servers: [
       { url: serverUrl },
     ],
     paths: {
+      '/api/public/data-dump': {
+        get: {
+          summary: 'Bulk download published dataset',
+          description: 'Unauthenticated bulk download for researchers. JSON and CSV formats include Bengali names, taxonomy authority metadata, global and Bangladesh conservation statuses with assessment years, residency, images, references, links, and publication timestamps.',
+          parameters: [
+            { name: 'format', in: 'query', schema: { type: 'string', enum: ['json', 'csv'], default: 'json' } },
+          ],
+          responses: {
+            200: { description: 'Complete species dataset download' },
+          },
+        },
+      },
       '/api/health': {
         get: {
           summary: 'Health check',
@@ -39,6 +51,7 @@ router.get('/openapi.json', (req, res) => {
       '/api/species': {
         get: {
           summary: 'List species',
+          description: 'Returns published species with global conservation status and year, Bangladesh conservation status and year, and taxonomy summary fields when available.',
           parameters: [
             { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
             { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
@@ -61,6 +74,7 @@ router.get('/openapi.json', (req, res) => {
       '/api/species/{id}': {
         get: {
           summary: 'Fetch a species by ID',
+          description: 'The response includes conservation_status and conservation_status_year for the global assessment, bd_conservation_status and bd_conservation_status_year for the Bangladesh assessment, and taxonomy.taxonomic_authority and taxonomy.authority_year when available.',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
           responses: {
             200: { description: 'Species detail' },

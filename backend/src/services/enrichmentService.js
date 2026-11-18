@@ -3,7 +3,10 @@
 // Priority: Wikipedia (page summary) → GBIF species/occurrences (taxonomy, habitat, images + coords)
 // ============================================================
 
+const cheerio = require('cheerio');
+
 const WIKIPEDIA_SUMMARY = 'https://en.wikipedia.org/api/rest_v1/page/summary/';
+const WIKIPEDIA_HTML = 'https://en.wikipedia.org/api/rest_v1/page/html/';
 const WIKIMEDIA_COMMONS_API = 'https://commons.wikimedia.org/w/api.php';
 const GBIF_SPECIES_SEARCH = 'https://api.gbif.org/v1/species/search';
 const GBIF_SPECIES_BASE = 'https://api.gbif.org/v1/species';
@@ -182,15 +185,17 @@ async function fetchFromWikipedia(scientificName) {
   if (!scientificName) return null;
   const title = encodeURIComponent(scientificName.replace(/\s+/g, '_'));
   try {
-    const [summaryRes, extLinksRes] = await Promise.allSettled([
+    const [summaryRes, extLinksRes, htmlRes] = await Promise.allSettled([
       fetchJSON(`${WIKIPEDIA_SUMMARY}${title}`, 15000),
-      fetchJSON(`https://en.wikipedia.org/w/api.php?action=query&prop=extlinks&titles=${title}&redirects=1&format=json&ellimit=500`, 15000)
+      fetchJSON(`https://en.wikipedia.org/w/api.php?action=query&prop=extlinks&titles=${title}&redirects=1&format=json&ellimit=500`, 15000),
+      fetch(`${WIKIPEDIA_HTML}${title}`).then(r => r.ok ? r.text() : null).catch(() => null)
     ]);
 
     let description = null;
     let thumbnail = null;
     let source = null;
     let iucnLink = null;
+    let references = '';
 
     if (summaryRes.status === 'fulfilled' && summaryRes.value) {
       const data = summaryRes.value;
@@ -209,12 +214,62 @@ async function fetchFromWikipedia(scientificName) {
       }
     }
 
+    if (htmlRes.status === 'fulfilled' && htmlRes.value) {
+      try {
+        const $ = cheerio.load(htmlRes.value);
+        const refs = [];
+        $('ol.references cite').each((i, el) => {
+          const $el = $(el);
+
+          // Clean up Wikipedia's native styling and extraneous text
+          $el.find('.reference-accessdate').remove();
+          $el.find('.mw-cite-backlink').remove();
+
+          // Unwrap all internal Wikipedia links (removes hyperlinks from authors, journals, etc.)
+          $el.find('a[rel="mw:WikiLink"]').each((_, a) => {
+            $(a).replaceWith($(a).html());
+          });
+
+          // Fix relative wiki links just in case any were missed
+          $el.find('a').each((_, a) => {
+            const href = $(a).attr('href');
+            if (href) {
+              if (href.startsWith('./')) {
+                $(a).attr('href', 'https://en.wikipedia.org/wiki/' + href.substring(2));
+              } else if (href.startsWith('/wiki/')) {
+                $(a).attr('href', 'https://en.wikipedia.org' + href);
+              } else if (href.startsWith('//')) {
+                $(a).attr('href', 'https:' + href);
+              }
+              // Add standard target for new tab
+              $(a).attr('target', '_blank').attr('rel', 'noopener noreferrer');
+            }
+          });
+
+          // Extract the beautifully formatted native HTML
+          let html = $el.html() || '';
+          html = html.trim();
+          
+          if (html.length > 10) refs.push(html);
+        });
+
+        if (refs.length > 0) {
+          // Format as HTML ordered list with proper spacing between items
+          const listItems = refs.map((ref) => `<li style="margin-bottom: 12px; line-height: 1.6;">${ref}</li>`).join('');
+          references = `<ol style="padding-left: 20px; margin: 0;">${listItems}</ol>`;
+        }
+      } catch (err) {
+        console.error('[Enrich] Cheerio parse error:', err.message);
+      }
+    }
+
     return {
       description,
       habitat: deriveHabitatFromText(description),
       thumbnail,
       source,
-      iucnLink
+      iucnLink,
+      references
     };
   } catch (err) {
     console.error(`[Enrichment] Wikipedia lookup failed for "${scientificName}": ${err.message}`);
@@ -268,7 +323,7 @@ async function fetchFromGBIFSpecies(scientificName) {
  */
 async function fetchFromGBIF(scientificName, limit = 8) {
   if (!scientificName) return { images: [], coords: [] };
-  const params = new URLSearchParams({ scientificName: scientificName, mediaType: 'StillImage', limit: String(limit) });
+  const params = new URLSearchParams({ scientificName: scientificName, mediaType: 'StillImage', limit: String(limit), country: 'BD' });
   try {
     const data = await fetchJSON(`${GBIF_OCCURRENCE_SEARCH}?${params.toString()}`, 12000); // Increased timeout for shared hosting
     const results = Array.isArray(data.results) ? data.results : [];
@@ -329,12 +384,18 @@ async function fetchFromWikidata(scientificName) {
     const eol = claims['P830'] ? claims['P830'][0].mainsnak?.datavalue?.value : null;
     const inat = claims['P3151'] ? claims['P3151'][0].mainsnak?.datavalue?.value : null;
     const gbif = claims['P846'] ? claims['P846'][0].mainsnak?.datavalue?.value : null;
+    const powo = claims['P5037'] ? claims['P5037'][0].mainsnak?.datavalue?.value : null;
+    const wfo = claims['P7715'] ? claims['P7715'][0].mainsnak?.datavalue?.value : null;
+    const bold = claims['P3606'] ? claims['P3606'][0].mainsnak?.datavalue?.value : null;
 
     const links = {};
     if (iucn) links.iucn = `https://www.iucnredlist.org/species/${iucn}/0`;
     if (eol) links.eol = `https://eol.org/pages/${eol}`;
     if (inat) links.inaturalist = `https://www.inaturalist.org/taxa/${inat}`;
     if (gbif) links.gbif = `https://www.gbif.org/species/${gbif}`;
+    if (powo) links.powo = `https://powo.science.kew.org/taxon/${powo}`;
+    if (wfo) links.wfo = `https://www.worldfloraonline.org/taxon/${wfo}`;
+    if (bold) links.bold = `https://boldsystems.org/index.php/TaxBrowser_TaxonPage?taxid=${bold}`;
     
     if (entity.sitelinks && entity.sitelinks.enwiki) {
       links.wikipedia = entity.sitelinks.enwiki.url;
@@ -343,6 +404,31 @@ async function fetchFromWikidata(scientificName) {
     return links;
   } catch (err) {
     console.error(`[Enrichment] Wikidata lookup failed for "${scientificName}": ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Query EOL search API for the page ID (Fallback when Wikidata has no P830)
+ */
+async function fetchFromEOL(scientificName) {
+  if (!scientificName) return null;
+  try {
+    const params = new URLSearchParams({ q: scientificName, page: '1', key: '' });
+    const data = await fetchJSON(`https://eol.org/api/search/1.0.json?${params.toString()}`, 10000);
+    const results = Array.isArray(data.results) ? data.results : [];
+    // Find exact match by comparing title to scientific name
+    const match = results.find(r => r.title && r.title.toLowerCase() === scientificName.toLowerCase());
+    if (match && match.id) {
+      return `https://eol.org/pages/${match.id}`;
+    }
+    // If no exact match, use the first result if available
+    if (results.length > 0 && results[0].id) {
+      return `https://eol.org/pages/${results[0].id}`;
+    }
+    return null;
+  } catch (err) {
+    console.error(`[Enrichment] EOL search failed for "${scientificName}": ${err.message}`);
     return null;
   }
 }
@@ -373,7 +459,7 @@ async function fetchFromiNaturalist(scientificName) {
  * Returns an object { description, images: [], coords: [], sources: [] }
  */
 async function enrichByScientificName(scientificName) {
-  const result = { description: null, habitat: null, taxonomy: null, images: [], coords: [], sources: [], external_links: {} };
+  const result = { description: null, habitat: null, taxonomy: null, images: [], coords: [], sources: [], external_links: {}, references: null };
 
   if (!scientificName) {
     console.warn(`[Enrichment] Empty scientific name provided`);
@@ -400,6 +486,19 @@ async function enrichByScientificName(scientificName) {
     result.external_links.inaturalist = inatResult.value;
   }
 
+  // Fallback: if Wikidata did not provide an EOL link, try the EOL search API
+  if (!result.external_links.eol) {
+    try {
+      const eolUrl = await fetchFromEOL(scientificName);
+      if (eolUrl) {
+        result.external_links.eol = eolUrl;
+        console.log(`[Enrichment] EOL fallback: got link via search API`);
+      }
+    } catch (err) {
+      console.error(`[Enrichment] EOL fallback failed:`, err.message);
+    }
+  }
+
   // Process Wikipedia results
   try {
     const wiki = wikiResult.status === 'fulfilled' ? wikiResult.value : null;
@@ -410,14 +509,16 @@ async function enrichByScientificName(scientificName) {
           result.sources.push({ type: 'wikipedia', url: wiki.source });
           result.external_links.wikipedia = wiki.source;
         }
-        if (wiki.iucnLink) {
-          result.external_links.iucn = wiki.iucnLink;
-        }
-        console.log(`[Enrichment] Wikipedia: got description (${wiki.description.length} chars)`);
       }
       if (wiki.habitat) {
         result.habitat = wiki.habitat;
-        console.log(`[Enrichment] Wikipedia: inferred habitat`);
+      }
+      if (wiki.iucnLink) {
+        result.external_links.iucn = wiki.iucnLink;
+      }
+      if (wiki.references) {
+        result.references = wiki.references;
+        console.log(`[Enrichment] Wikipedia: got references (${wiki.references.length} chars)`);
       }
       if (wiki.thumbnail) {
         const commonsMeta = await fetchWikimediaCommonsMetadata(wiki.thumbnail);

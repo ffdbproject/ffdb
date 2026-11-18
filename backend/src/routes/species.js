@@ -9,29 +9,38 @@ const router = express.Router();
 const {
   getAllSpecies,
   getSpeciesById,
+  getSpeciesPreview,
   createContribution,
   createSpecies,
   updateSpecies,
   deleteSpecies,
   getStats,
   uploadImage,
+  checkNameAvailability,
 } = require('../controllers/speciesController');
-const { adminAuth } = require('../middleware/adminAuth');
+const { adminAuth, requireContributor } = require('../middleware/adminAuth');
 const { contributeLimiter } = require('../middleware/rateLimiter');
 
 // --- Public Routes ---
 
-// GET /api/species           — List species (paginated, filtered)
+// GET /api/species           -- List species (paginated, filtered)
 router.get('/', getAllSpecies);
 
-// GET /api/species/stats/overview — Dashboard statistics
+// GET /api/species/check-name -- Real-time check if scientific name exists
+router.get('/check-name', requireContributor, checkNameAvailability);
+
+// GET /api/species/stats/overview -- Dashboard statistics
 // NOTE: This MUST be before /:id to avoid "stats" being parsed as an ID
 router.get('/stats/overview', getStats);
 
-// POST /api/species/contribute — Public contribution endpoint (always saved as draft)
+// POST /api/species/contribute -- Public contribution endpoint (always saved as draft)
 router.post('/contribute', contributeLimiter, createContribution);
 
-// GET /api/species/:id       — Get single species with full details
+// GET /api/species/preview/:id -- Preview unpublished draft/pending species (auth required)
+// NOTE: This MUST be before /:id so "preview" is not treated as a species ID
+router.get('/preview/:id', requireContributor, getSpeciesPreview);
+
+// GET /api/species/:id       -- Get single species with full details
 router.get('/:id', getSpeciesById);
 
 const multer = require('multer');
@@ -47,7 +56,7 @@ const storage = multer.diskStorage({
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    // Use only the safe, validated extension — not the raw originalname extension
+    // Use only the safe, validated extension -- not the raw originalname extension
     const ext = path.extname(file.originalname).toLowerCase();
     cb(null, uniqueSuffix + ext);
   }
@@ -69,21 +78,21 @@ const upload = multer({
   }
 });
 
-// --- Admin Protected Routes ---
+// --- Protected Routes (admin + contributor) ---
 
-// POST /api/species          — Create a new species
-router.post('/', adminAuth, createSpecies);
+// POST /api/species          -- Create a new species
+router.post('/', requireContributor, createSpecies);
 
-// POST /api/species/:id/upload — Upload an image for a species
-router.post('/:id/upload', adminAuth, upload.single('image'), uploadImage);
+// POST /api/species/:id/upload -- Upload an image for a species
+router.post('/:id/upload', requireContributor, upload.single('image'), uploadImage);
 
-// PUT /api/species/:id       — Update a species
-router.put('/:id', adminAuth, updateSpecies);
+// PUT /api/species/:id       -- Update a species
+router.put('/:id', requireContributor, updateSpecies);
 
-// DELETE /api/species/:id    — Delete a species
-router.delete('/:id', adminAuth, deleteSpecies);
+// DELETE /api/species/:id    -- Delete a species
+router.delete('/:id', requireContributor, deleteSpecies);
 
-// POST /api/species/:id/delete — Delete fallback for hosts that block DELETE requests
-router.post('/:id/delete', adminAuth, deleteSpecies);
+// POST /api/species/:id/delete -- Delete fallback for hosts that block DELETE requests
+router.post('/:id/delete', requireContributor, deleteSpecies);
 
 module.exports = router;

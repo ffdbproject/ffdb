@@ -4,10 +4,12 @@
 // ============================================================
 
 const { pool } = require('../config/db');
-const { isAdminAuthorized } = require('../utils/auth');
+const { isAdminAuthorized, getUserFromRequest } = require('../utils/auth');
 const { normalizeOptionalString, normalizeImageUrl } = require('../utils/normalize');
 const path = require('path');
 const fs = require('fs/promises');
+const redisClient = require('../utils/redisClient');
+const { sendSpeciesSubmissionNotification } = require('../services/emailService');
 let sharp = null;
 try {
   sharp = require('sharp');
@@ -149,6 +151,13 @@ function normalizeConservationStatus(value) {
   return CONSERVATION_STATUS_ALIASES[aliasKey] || null;
 }
 
+function normalizeAssessmentYear(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const year = Number(value);
+  if (!Number.isInteger(year) || year < 1000 || year > new Date().getFullYear() + 1) return null;
+  return year;
+}
+
 // normalizeOptionalString imported from ../utils/normalize
 
 function normalizeRequiredString(value, maxLen) {
@@ -264,27 +273,65 @@ const TOTAL_COUNT_CACHE_TTL = 2 * 60 * 1000; // 2 minutes
 
 async function getAllSpecies(req, res, next) {
   try {
-    const isAdmin = isAdminAuthorized(req);
+    const user = req.user || getUserFromRequest(req);
+    const isAdmin = user?.role === 'admin';
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
     const cursorParam = req.query.cursor || null;
 
     // Optional filters
-    const { category, status, conservation_status, origin, kingdom, phylum, class: className, order, family, genus } = req.query;
+    const { category, status, conservation_status, residency_status, origin, kingdom, phylum, class: className, order, family, genus, search, q } = req.query;
+    const searchTerm = (search || q || '').trim();
 
     // Build dynamic WHERE clause
     const conditions = [];
     const values = [];
     let paramIndex = 1;
 
-    // Public requests can only view published records.
-    // Admin requests can view all statuses by default, or filter by a specific valid status.
-    if (isAdmin) {
-      if (status && VALID_STATUSES.includes(status)) {
+    // Search filter across scientific name, english name, bengali name, family, public_id, and internal id
+    if (searchTerm) {
+      const cleanSearch = `%${searchTerm.toLowerCase()}%`;
+      conditions.push(`(
+        LOWER(s.scientific_name) LIKE $${paramIndex} OR
+        LOWER(COALESCE(s.english_name, '')) LIKE $${paramIndex} OR
+        LOWER(COALESCE(s.bengali_name, '')) LIKE $${paramIndex} OR
+        LOWER(COALESCE(t.family, '')) LIKE $${paramIndex} OR
+        CAST(s.public_id AS TEXT) LIKE $${paramIndex} OR
+        CAST(s.id AS TEXT) LIKE $${paramIndex}
+      )`);
+      values.push(cleanSearch);
+      paramIndex++;
+    }
+
+    // Role-based visibility
+    if (user?.role === 'admin') {
+      if (req.query.admin_view === 'true') {
+        // Admin dashboard explicitly opts into viewing unpublished records.
+        if (status && VALID_STATUSES.includes(status)) {
+          conditions.push(`s.status = $${paramIndex++}`);
+          values.push(status);
+        }
+      } else {
+        // Browse and homepage remain public surfaces for logged-in admins.
         conditions.push(`s.status = $${paramIndex++}`);
-        values.push(status);
+        values.push('published');
+      }
+    } else if (user?.role === 'contributor') {
+      if (req.query.admin_view === 'true') {
+        // In Admin Panel: Contributor only sees their own
+        conditions.push(`s.contributed_by = $${paramIndex++}`);
+        values.push(user.label || 'unknown');
+        if (status && VALID_STATUSES.includes(status)) {
+          conditions.push(`s.status = $${paramIndex++}`);
+          values.push(status);
+        }
+      } else {
+        // Normal browse/search endpoints are public surfaces, even for logged-in contributors.
+        conditions.push(`s.status = $${paramIndex++}`);
+        values.push('published');
       }
     } else {
+      // Public requests: can only view published records
       conditions.push(`s.status = $${paramIndex++}`);
       values.push('published');
     }
@@ -302,6 +349,11 @@ async function getAllSpecies(req, res, next) {
     if (conservation_status) {
       conditions.push(`s.conservation_status = $${paramIndex++}`);
       values.push(conservation_status);
+    }
+
+    if (residency_status) {
+      conditions.push(`s.residency_status = $${paramIndex++}`);
+      values.push(residency_status);
     }
 
     if (kingdom) {
@@ -335,15 +387,15 @@ async function getAllSpecies(req, res, next) {
     }
 
     // --- Cursor-based keyset pagination ---
-    // Cursor encodes the last seen (created_at, id) so PostgreSQL can
+    // Cursor encodes the last seen public_id so serial order stays stable.
     // seek directly to the next row via index instead of scanning OFFSET rows.
     let useCursor = false;
     if (cursorParam) {
       try {
         const decoded = JSON.parse(Buffer.from(cursorParam, 'base64url').toString());
-        if (decoded.d && decoded.i) {
-          conditions.push(`(s.created_at, s.id) < ($${paramIndex++}, $${paramIndex++})`);
-          values.push(decoded.d, decoded.i);
+        if (decoded.i) {
+          conditions.push(`s.public_id < $${paramIndex++}`);
+          values.push(decoded.i);
           useCursor = true;
         }
       } catch { /* invalid cursor, fall back to offset */ }
@@ -354,7 +406,7 @@ async function getAllSpecies(req, res, next) {
       : '';
 
     // Build the filter signature for count caching
-    const filterKey = `${isAdmin}:${whereClause}:${values.slice(0, values.length - (useCursor ? 2 : 0)).join(',')}`;
+    const filterKey = `${isAdmin}:${whereClause}:${values.slice(0, values.length - (useCursor ? 1 : 0)).join(',')}`;
 
     // Get total count (cached to avoid repeated full-table scans)
     let totalRecords = 0;
@@ -363,7 +415,7 @@ async function getAllSpecies(req, res, next) {
     } else {
       // Build WHERE without the cursor condition for accurate total count
       const countConditions = conditions.slice(0, conditions.length - (useCursor ? 1 : 0));
-      const countValues = values.slice(0, values.length - (useCursor ? 2 : 0));
+      const countValues = values.slice(0, values.length - (useCursor ? 1 : 0));
       const countWhere = countConditions.length > 0 ? `WHERE ${countConditions.join(' AND ')}` : '';
       const countResult = await pool.query(
         `SELECT COUNT(*) FROM species s LEFT JOIN taxonomy t ON t.species_id = s.id ${countWhere}`,
@@ -376,6 +428,15 @@ async function getAllSpecies(req, res, next) {
     const totalPages = Math.ceil(totalRecords / limit);
 
     // Data query — uses keyset when cursor provided, OFFSET otherwise
+    const dataOrder = req.query.admin_view === 'true'
+      ? `ORDER BY
+          CASE WHEN s.status = 'published' THEN 1 ELSE 0 END ASC,
+          CASE WHEN s.status <> 'published' THEN s.updated_at END DESC NULLS LAST,
+          CASE WHEN s.status <> 'published' THEN s.created_at END DESC NULLS LAST,
+          CASE WHEN s.status = 'published' THEN s.public_id END DESC NULLS LAST,
+          s.id DESC`
+      : 'ORDER BY s.public_id DESC';
+
     const dataQuery = `
       SELECT 
         s.id AS internal_id,
@@ -385,8 +446,10 @@ async function getAllSpecies(req, res, next) {
         s.bengali_name,
         s.category,
         s.origin,
+        s.residency_status,
         s.conservation_status,
         s.status,
+        s.published_at,
         s.created_at,
         s.updated_at,
         t.family,
@@ -396,7 +459,7 @@ async function getAllSpecies(req, res, next) {
       LEFT JOIN taxonomy t ON t.species_id = s.id
       LEFT JOIN images i ON i.species_id = s.id AND i.is_primary = TRUE
       ${whereClause}
-      ORDER BY s.created_at DESC, s.id DESC
+      ${dataOrder}
       LIMIT $${paramIndex++}
       ${useCursor ? '' : `OFFSET $${paramIndex++}`}
     `;
@@ -431,15 +494,19 @@ async function getAllSpecies(req, res, next) {
         }
       }
 
-      // For public (non-admin) requests, use `public_id` as the URL identifier.
-      if (!isAdmin) {
-        base.id = base.public_id || base.internal_id;
+      // Determine if this is an admin dashboard management request
+      const isAdminView = (req.query.admin_view === 'true' || req.query.admin_view === true) && isAdminAuthorized(req);
+
+      base.internal_id = row.internal_id;
+      base.public_id = row.public_id;
+
+      if (isAdminView) {
+        // Admin dashboard management table uses database internal_id for CRUD operations
+        base.id = row.internal_id;
       } else {
-        base.id = base.internal_id;
+        // Public browsing (cards, listings, search) ALWAYS uses public_id for published items
+        base.id = row.public_id || row.internal_id;
       }
-      // Remove internal helper fields to keep payload tidy
-      delete base.public_id;
-      delete base.internal_id;
       return base;
     }));
 
@@ -448,8 +515,7 @@ async function getAllSpecies(req, res, next) {
     if (normalizedRows.length === limit) {
       const lastRow = dataResult.rows[dataResult.rows.length - 1];
       nextCursor = Buffer.from(JSON.stringify({
-        d: lastRow.created_at,
-        i: lastRow.internal_id || lastRow.id,
+        i: lastRow.public_id,
       })).toString('base64url');
     }
 
@@ -477,7 +543,9 @@ async function getAllSpecies(req, res, next) {
  */
 async function getSpeciesById(req, res, next) {
   try {
-    const isAdmin = isAdminAuthorized(req);
+    const user = req.user || getUserFromRequest(req);
+    const isAdmin = user?.role === 'admin';
+    const isContributor = user?.role === 'contributor';
     const { id } = req.params;
 
     if (!/^\d+$/.test(id)) {
@@ -487,94 +555,114 @@ async function getSpeciesById(req, res, next) {
       });
     }
 
-    // Fetch species with taxonomy
-    // Public requests should resolve by `public_id` and only return published records.
-    // Admin requests continue to resolve by internal `id`.
-    const speciesQuery = isAdmin
-      ? `
-        SELECT 
-          s.*,
-          t.kingdom,
-          t.phylum,
-          t.class,
-          t."order",
-          t.family,
-          t.genus
-        FROM species s
-        LEFT JOIN taxonomy t ON t.species_id = s.id
-        WHERE s.id = $1
-      `
-      : `
-        SELECT 
-          s.*,
-          t.kingdom,
-          t.phylum,
-          t.class,
-          t."order",
-          t.family,
-          t.genus
-        FROM species s
-        LEFT JOIN taxonomy t ON t.species_id = s.id
-        WHERE s.public_id = $1 AND s.status = 'published'
-      `;
-
-    const speciesResult = await pool.query(speciesQuery, [id]);
-
-    if (speciesResult.rows.length === 0) {
-      // If admin requested and no result by internal id, try resolving by public_id so admins
-      // can view public URLs as well.
-      if (isAdmin) {
-        const altQuery = `
-          SELECT s.*, t.kingdom, t.phylum, t.class, t."order", t.family, t.genus
-          FROM species s
-          LEFT JOIN taxonomy t ON t.species_id = s.id
-          WHERE s.public_id = $1
-        `;
-        const altResult = await pool.query(altQuery, [id]);
-        if (altResult.rows.length > 0) {
-          speciesResult.rows = altResult.rows;
+    // Try Redis cache for purely public requests
+    if (!isAdmin && !isContributor) {
+      const cacheKey = `species:data:${id}`;
+      try {
+        const cached = await redisClient.get(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          return res.json({ success: true, data: parsed });
         }
-      }
-
-      if (speciesResult.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: `Species with ID ${id} not found`,
-        });
+      } catch (e) {
+        // Redis unavailable — continue to DB query
       }
     }
 
-    // Fetch all images for this species (use internal species.id)
-    const imagesResult = await pool.query(
-      'SELECT id, image_url, image_credit, is_primary, created_at FROM images WHERE species_id = $1 ORDER BY is_primary DESC, created_at ASC',
-      [speciesResult.rows[0].id]
-    );
+    // 1. Primary lookup: ALWAYS check by public_id first!
+    // This guarantees an admin visiting /species/107 sees the exact same published species as the public.
+    const speciesResult = await pool.query(`
+      SELECT s.*, t.kingdom, t.phylum, t.class, t."order", t.family, t.genus, t.taxonomic_authority, t.authority_year
+      FROM species s LEFT JOIN taxonomy t ON t.species_id = s.id
+      WHERE s.public_id = $1
+    `, [id]);
 
-    const species = speciesResult.rows[0];
+    let species = speciesResult.rows[0];
 
-    // Normalize image URLs for mobile compatibility and provide thumbnail_url when available
-    const normalizedImages = await Promise.all(imagesResult.rows.map(async (img) => {
-      const image_url = normalizeImageUrl(img.image_url);
-      let thumbnail_url = null;
-      if (img.image_url && img.image_url.startsWith('/uploads/')) {
-        try {
-          const origName = path.basename(img.image_url);
-          const smallName = origName.replace(/(\.[^.]+)$/, '-sm$1');
-          const smallFs = path.resolve(process.cwd(), 'uploads', smallName);
-          await fs.access(smallFs);
-          thumbnail_url = `/uploads/${smallName}`;
-        } catch (e) {
-          // no thumbnail
-        }
+    // 2. Secondary fallback: if not found by public_id, and requester is admin/contributor,
+    // check if it matches an internal database id (e.g. legacy calls or admin edit lookups).
+    if (!species && (isAdmin || isContributor)) {
+      const altResult = await pool.query(`
+        SELECT s.*, t.kingdom, t.phylum, t.class, t."order", t.family, t.genus, t.taxonomic_authority, t.authority_year
+        FROM species s LEFT JOIN taxonomy t ON t.species_id = s.id
+        WHERE s.id = $1
+      `, [id]);
+      if (altResult.rows.length > 0) {
+        species = altResult.rows[0];
       }
-      return {
-        ...img,
-        image_url,
-        thumbnail_url,
-      };
-    }));
+    }
 
-    // Fetch Next and Previous species
+    if (!species) {
+      return res.status(404).json({
+        success: false,
+        message: `Species with ID ${id} not found`,
+      });
+    }
+
+    // Unpublished records are available only through the dedicated preview endpoint.
+    if (species.status !== 'published') {
+      return res.status(404).json({
+        success: false,
+        message: `Species with ID ${id} not found`,
+      });
+    }
+
+    const response = await buildSpeciesDetailResponse(species);
+
+    // Cache the response for public published consumers (by public_id)
+    if (!isAdmin && !isContributor && species.status === 'published' && response.public_id) {
+      const cacheKey = `species:data:${response.public_id}`;
+      try {
+        // TTL 300s (5 minutes)
+        await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
+      } catch (e) {
+        // ignore redis errors
+      }
+    }
+
+    res.json({ success: true, data: response });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * Helper to build full species detail response with images, taxonomy,
+ * coordinates, next/prev, and related species.
+ */
+async function buildSpeciesDetailResponse(species) {
+  // Fetch all images for this species (use internal species.id)
+  const imagesResult = await pool.query(
+    'SELECT id, image_url, image_credit, is_primary, created_at FROM images WHERE species_id = $1 ORDER BY is_primary DESC, created_at ASC',
+    [species.id]
+  );
+
+  // Normalize image URLs for mobile compatibility and provide thumbnail_url when available
+  const normalizedImages = await Promise.all(imagesResult.rows.map(async (img) => {
+    const image_url = normalizeImageUrl(img.image_url);
+    let thumbnail_url = null;
+    if (img.image_url && img.image_url.startsWith('/uploads/')) {
+      try {
+        const origName = path.basename(img.image_url);
+        const smallName = origName.replace(/(\.[^.]+)$/, '-sm$1');
+        const smallFs = path.resolve(process.cwd(), 'uploads', smallName);
+        await fs.access(smallFs);
+        thumbnail_url = `/uploads/${smallName}`;
+      } catch (e) {
+        // no thumbnail
+      }
+    }
+    return {
+      ...img,
+      image_url,
+      thumbnail_url,
+    };
+  }));
+
+  // Fetch Next and Previous species (for published species)
+  let previous_species = null;
+  let next_species = null;
+  if (species.status === 'published') {
     const npQuery = `
       (
         SELECT id, public_id, scientific_name, english_name, 'previous' as rel
@@ -591,74 +679,124 @@ async function getSpeciesById(req, res, next) {
       )
     `;
     const npResult = await pool.query(npQuery, [species.id]);
-    let previous_species = npResult.rows.find(r => r.rel === 'previous') || null;
-    let next_species = npResult.rows.find(r => r.rel === 'next') || null;
+    previous_species = npResult.rows.find(r => r.rel === 'previous') || null;
+    next_species = npResult.rows.find(r => r.rel === 'next') || null;
     if (previous_species) {
-       if (!isAdmin) previous_species.id = previous_species.public_id || previous_species.id;
-       delete previous_species.public_id; delete previous_species.rel;
+      previous_species.id = previous_species.public_id || previous_species.id;
+      delete previous_species.rel;
     }
     if (next_species) {
-       if (!isAdmin) next_species.id = next_species.public_id || next_species.id;
-       delete next_species.public_id; delete next_species.rel;
+      next_species.id = next_species.public_id || next_species.id;
+      delete next_species.rel;
     }
+  }
 
-    // Fetch related species (same family)
-    let related_species = [];
-    if (species.family) {
-      const relatedQuery = `
-        SELECT s.id, s.public_id, s.scientific_name, s.english_name, i.image_url as primary_image
-        FROM species s
-        JOIN taxonomy t ON t.species_id = s.id
-        LEFT JOIN images i ON i.species_id = s.id AND i.is_primary = TRUE
-        WHERE t.family = $1 AND s.id != $2 AND s.status = 'published'
-        ORDER BY s.created_at DESC
-        LIMIT 4
-      `;
-      const relatedResult = await pool.query(relatedQuery, [species.family, species.id]);
-      related_species = relatedResult.rows.map(r => {
-         const ret = {
-           ...r,
-           primary_image: r.primary_image ? normalizeImageUrl(r.primary_image) : null
-         };
-         if (!isAdmin) ret.id = ret.public_id || ret.id;
-         delete ret.public_id;
-         return ret;
+  // Fetch related species (same family, published only)
+  let related_species = [];
+  if (species.family && species.status === 'published') {
+    const relatedQuery = `
+      SELECT s.id, s.public_id, s.scientific_name, s.english_name, i.image_url as primary_image
+      FROM species s
+      JOIN taxonomy t ON t.species_id = s.id
+      LEFT JOIN images i ON i.species_id = s.id AND i.is_primary = TRUE
+      WHERE t.family = $1 AND s.id != $2 AND s.status = 'published'
+      ORDER BY s.created_at DESC
+      LIMIT 4
+    `;
+    const relatedResult = await pool.query(relatedQuery, [species.family, species.id]);
+    related_species = relatedResult.rows.map(r => ({
+      ...r,
+      id: r.public_id || r.id,
+      primary_image: r.primary_image ? normalizeImageUrl(r.primary_image) : null,
+    }));
+  }
+
+  return {
+    id: species.id,
+    public_id: species.public_id,
+    scientific_name: species.scientific_name,
+    english_name: species.english_name,
+    bengali_name: species.bengali_name,
+    category: species.category,
+    origin: species.origin,
+    description: species.description,
+    habitat: species.habitat,
+    conservation_status: species.conservation_status,
+    conservation_status_year: species.conservation_status_year,
+    bd_conservation_status: species.bd_conservation_status,
+    bd_conservation_status_year: species.bd_conservation_status_year,
+    residency_status: species.residency_status,
+    references: species.references,
+    external_links: species.external_links,
+    location_coordinates: species.location_coordinates,
+    status: species.status,
+    published_at: species.published_at,
+    created_at: species.created_at,
+    updated_at: species.updated_at,
+    taxonomy: {
+      kingdom: species.kingdom,
+      phylum: species.phylum,
+      class: species.class,
+      order: species.order,
+      family: species.family,
+      genus: species.genus,
+      taxonomic_authority: species.taxonomic_authority,
+      authority_year: species.authority_year,
+    },
+    images: normalizedImages,
+    previous_species,
+    next_species,
+    related_species,
+  };
+}
+
+/**
+ * GET /api/species/preview/:id
+ * Dedicated preview endpoint for draft and pending_review species.
+ * Strictly requires admin or contributor authentication.
+ */
+async function getSpeciesPreview(req, res, next) {
+  try {
+    const { id } = req.params;
+    const user = req.user || getUserFromRequest(req);
+    const isAdmin = user && user.role === 'admin';
+    const isContributor = user && user.role === 'contributor';
+
+    if (!isAdmin && !isContributor) {
+      return res.status(403).json({
+        success: false,
+        message: 'Preview access requires administrator or contributor authentication.',
       });
     }
 
-    // Structure taxonomy as a nested object
-    const response = {
-      id: species.id,
-      public_id: species.public_id,
-      scientific_name: species.scientific_name,
-      english_name: species.english_name,
-      bengali_name: species.bengali_name,
-      category: species.category,
-      origin: species.origin,
-      description: species.description,
-      habitat: species.habitat,
-      conservation_status: species.conservation_status,
-      residency_status: species.residency_status,
-      references: species.references,
-      external_links: species.external_links,
-      location_coordinates: species.location_coordinates,
-      status: species.status,
-      created_at: species.created_at,
-      updated_at: species.updated_at,
-      taxonomy: {
-        kingdom: species.kingdom,
-        phylum: species.phylum,
-        class: species.class,
-        order: species.order,
-        family: species.family,
-        genus: species.genus,
-      },
-      images: normalizedImages,
-      previous_species,
-      next_species,
-      related_species,
-    };
+    // Preview queries by internal database id
+    const result = await pool.query(`
+      SELECT s.*, t.kingdom, t.phylum, t.class, t."order", t.family, t.genus, t.taxonomic_authority, t.authority_year
+      FROM species s LEFT JOIN taxonomy t ON t.species_id = s.id
+      WHERE s.id = $1
+    `, [id]);
 
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `Species preview for ID ${id} not found.`,
+      });
+    }
+
+    const species = result.rows[0];
+
+    // Contributors can only preview their own drafts or published items
+    if (isContributor && !isAdmin && species.status !== 'published' && species.contributed_by !== user?.label) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to preview this submission.',
+      });
+    }
+
+    const response = await buildSpeciesDetailResponse(species);
+    response.is_preview = true;
+
+    // Never cache previews in public Redis
     res.json({ success: true, data: response });
   } catch (err) {
     next(err);
@@ -681,6 +819,9 @@ async function createSpecies(req, res, next) {
       category,
       origin,
       conservation_status,
+      conservation_status_year,
+      bd_conservation_status,
+      bd_conservation_status_year,
       residency_status,
       references,
       external_links,
@@ -695,6 +836,8 @@ async function createSpecies(req, res, next) {
     const description = normalizeOptionalString(req.body.description, FIELD_LIMITS.description);
     const habitat = normalizeOptionalString(req.body.habitat, FIELD_LIMITS.habitat);
     const taxonomy = normalizeTaxonomy(req.body.taxonomy);
+    const taxonomic_authority = normalizeOptionalString(req.body.taxonomy?.taxonomic_authority, 255);
+    const authority_year = normalizeAssessmentYear(req.body.taxonomy?.authority_year);
 
     // Validate required fields
     if (!scientific_name || !category) {
@@ -726,6 +869,9 @@ async function createSpecies(req, res, next) {
     }
 
     const normalizedConservationStatus = normalizeConservationStatus(conservation_status);
+    const normalizedConservationStatusYear = normalizeAssessmentYear(conservation_status_year);
+    const normalizedBdConservationStatus = normalizeConservationStatus(bd_conservation_status);
+    const normalizedBdConservationStatusYear = normalizeAssessmentYear(bd_conservation_status_year);
     const normalizedImages = normalizeImages(images);
 
     const normalizedCoordinates = normalizeCoordinates(location_coordinates);
@@ -734,12 +880,21 @@ async function createSpecies(req, res, next) {
     // Use a transaction to ensure all inserts succeed or none do
     await client.query('BEGIN');
 
+    // Determine contributor label for ownership tracking
+    const contributorLabel = req.user?.role === 'contributor' ? (req.user.label || 'unknown') : null;
+
+    // Contributors cannot set status to 'published'
+    let effectiveStatus = status || 'draft';
+    if (req.user?.role === 'contributor' && effectiveStatus === 'published') {
+      effectiveStatus = 'pending_review';
+    }
+
     // 1. Insert species
     const speciesResult = await client.query(
       `INSERT INTO species 
         (scientific_name, english_name, bengali_name, category, origin, description, 
-         habitat, conservation_status, residency_status, "references", external_links, location_coordinates, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         habitat, conservation_status, conservation_status_year, bd_conservation_status, bd_conservation_status_year, residency_status, "references", external_links, location_coordinates, status, published_at, contributed_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
         scientific_name,
@@ -750,11 +905,16 @@ async function createSpecies(req, res, next) {
         description,
         habitat,
         normalizedConservationStatus,
+        normalizedConservationStatusYear,
+        normalizedBdConservationStatus,
+        normalizedBdConservationStatusYear,
         residency_status || 'resident',
         references || null,
         external_links ? JSON.stringify(external_links) : '{}',
         serializedCoordinates,
-        status || 'draft',
+        effectiveStatus,
+        effectiveStatus === 'published' ? new Date() : null,
+        contributorLabel,
       ]
     );
 
@@ -763,8 +923,8 @@ async function createSpecies(req, res, next) {
     // 2. Insert taxonomy (if provided)
     if (taxonomy) {
       await client.query(
-        `INSERT INTO taxonomy (species_id, kingdom, phylum, class, "order", family, genus)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO taxonomy (species_id, kingdom, phylum, class, "order", family, genus, taxonomic_authority, authority_year)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           newSpecies.id,
           taxonomy.kingdom,
@@ -773,6 +933,8 @@ async function createSpecies(req, res, next) {
           taxonomy.order,
           taxonomy.family,
           taxonomy.genus,
+          taxonomic_authority,
+          authority_year,
         ]
       );
     }
@@ -794,6 +956,16 @@ async function createSpecies(req, res, next) {
     }
 
     await client.query('COMMIT');
+    // Invalidate Redis cache for this species (if it has a public_id)
+    try {
+      if (newSpecies.public_id) {
+        await redisClient.del(`species:data:${newSpecies.public_id}`).catch(() => {});
+        await redisClient.del(`prerender:species:${newSpecies.public_id}`).catch(() => {});
+      }
+    } catch (e) {
+      // ignore redis errors
+    }
+
     invalidateStatsCache();
 
     res.status(201).json({
@@ -801,6 +973,12 @@ async function createSpecies(req, res, next) {
       message: 'Species created successfully',
       data: newSpecies,
     });
+
+    // Send email notification ONLY on submit for review (not draft)
+    if (newSpecies.status === 'pending_review') {
+      const source = req.user?.role === 'contributor' ? 'contributor' : 'admin';
+      sendSpeciesSubmissionNotification(newSpecies, source, contributorLabel);
+    }
   } catch (err) {
     await client.query('ROLLBACK');
     if (err.code === '23505' && err.constraint === 'species_scientific_name_key') {
@@ -835,6 +1013,9 @@ async function updateSpecies(req, res, next) {
       category,
       origin,
       conservation_status,
+      conservation_status_year,
+      bd_conservation_status,
+      bd_conservation_status_year,
       residency_status,
       references,
       external_links,
@@ -858,6 +1039,12 @@ async function updateSpecies(req, res, next) {
       ? undefined
       : (normalizeOptionalString(req.body.habitat, FIELD_LIMITS.habitat) || null);
     const taxonomy = normalizeTaxonomy(req.body.taxonomy);
+    const taxonomic_authority = req.body.taxonomy?.taxonomic_authority === undefined
+      ? undefined
+      : normalizeOptionalString(req.body.taxonomy.taxonomic_authority, 255);
+    const authority_year = req.body.taxonomy?.authority_year === undefined
+      ? undefined
+      : normalizeAssessmentYear(req.body.taxonomy.authority_year);
 
     if (category && !VALID_CATEGORIES.includes(category)) {
       return res.status(400).json({
@@ -883,6 +1070,15 @@ async function updateSpecies(req, res, next) {
     const normalizedConservationStatus = conservation_status === undefined
       ? undefined
       : normalizeConservationStatus(conservation_status);
+    const normalizedConservationStatusYear = conservation_status_year === undefined
+      ? undefined
+      : normalizeAssessmentYear(conservation_status_year);
+    const normalizedBdConservationStatus = bd_conservation_status === undefined
+      ? undefined
+      : normalizeConservationStatus(bd_conservation_status);
+    const normalizedBdConservationStatusYear = bd_conservation_status_year === undefined
+      ? undefined
+      : normalizeAssessmentYear(bd_conservation_status_year);
     const normalizedImages = normalizeImages(req.body.images);
 
     // Handle location_coordinates carefully: only update when the client provides the field.
@@ -901,13 +1097,33 @@ async function updateSpecies(req, res, next) {
     await client.query('BEGIN');
 
     // Check if species exists and lock the row for update to safely handle publish transitions
-    const existing = await client.query('SELECT id, status, public_id FROM species WHERE id = $1 FOR UPDATE', [id]);
+    const existing = await client.query('SELECT id, status, public_id, published_at, contributed_by FROM species WHERE id = $1 FOR UPDATE', [id]);
     if (existing.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({
         success: false,
         message: `Species with ID ${id} not found`,
       });
+    }
+
+    // Contributor permission checks
+    if (req.user?.role === 'contributor') {
+      // Contributors can only edit species they created
+      if (existing.rows[0].contributed_by !== req.user.label) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'You can only edit species you submitted.',
+        });
+      }
+      // Contributors cannot set status to 'published'
+      if (status === 'published') {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'Contributors cannot publish species. Submit for review instead.',
+        });
+      }
     }
 
     // 1. Update species - build dynamic query to only update provided fields
@@ -946,6 +1162,18 @@ async function updateSpecies(req, res, next) {
     if (normalizedConservationStatus !== undefined) {
       updates.push(`conservation_status = $${paramIndex++}`);
       params.push(normalizedConservationStatus);
+    }
+    if (normalizedConservationStatusYear !== undefined) {
+      updates.push(`conservation_status_year = $${paramIndex++}`);
+      params.push(normalizedConservationStatusYear);
+    }
+    if (normalizedBdConservationStatus !== undefined) {
+      updates.push(`bd_conservation_status = $${paramIndex++}`);
+      params.push(normalizedBdConservationStatus);
+    }
+    if (normalizedBdConservationStatusYear !== undefined) {
+      updates.push(`bd_conservation_status_year = $${paramIndex++}`);
+      params.push(normalizedBdConservationStatusYear);
     }
     if (residency_status !== undefined) {
       updates.push(`residency_status = $${paramIndex++}`);
@@ -986,6 +1214,14 @@ async function updateSpecies(req, res, next) {
       const prevPublicId = existing.rows[0].public_id;
       const newStatus = updateResult.rows[0].status;
 
+      if (newStatus === 'published' && prevStatus !== 'published') {
+        await client.query(
+          'UPDATE species SET published_at = NOW() WHERE id = $1',
+          [id]
+        );
+        updateResult.rows[0].published_at = new Date();
+      }
+
       if (newStatus === 'published' && prevStatus !== 'published' && !prevPublicId) {
         // Reserve next public id from sequence and assign
         const seqRes = await client.query("SELECT nextval('species_public_id_seq') AS next_pub_id");
@@ -1003,15 +1239,17 @@ async function updateSpecies(req, res, next) {
     // 2. Upsert taxonomy (INSERT or UPDATE)
     if (taxonomy) {
       await client.query(
-        `INSERT INTO taxonomy (species_id, kingdom, phylum, class, "order", family, genus)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO taxonomy (species_id, kingdom, phylum, class, "order", family, genus, taxonomic_authority, authority_year)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (species_id) DO UPDATE SET
            kingdom = COALESCE(EXCLUDED.kingdom, taxonomy.kingdom),
            phylum  = COALESCE(EXCLUDED.phylum, taxonomy.phylum),
            class   = COALESCE(EXCLUDED.class, taxonomy.class),
            "order" = COALESCE(EXCLUDED."order", taxonomy."order"),
            family  = COALESCE(EXCLUDED.family, taxonomy.family),
-           genus   = COALESCE(EXCLUDED.genus, taxonomy.genus)`,
+           genus   = COALESCE(EXCLUDED.genus, taxonomy.genus),
+           taxonomic_authority = COALESCE(EXCLUDED.taxonomic_authority, taxonomy.taxonomic_authority),
+           authority_year = COALESCE(EXCLUDED.authority_year, taxonomy.authority_year)`,
         [
           id,
           taxonomy.kingdom,
@@ -1020,6 +1258,8 @@ async function updateSpecies(req, res, next) {
           taxonomy.order,
           taxonomy.family,
           taxonomy.genus,
+          taxonomic_authority,
+          authority_year,
         ]
       );
     }
@@ -1038,6 +1278,25 @@ async function updateSpecies(req, res, next) {
     }
 
     await client.query('COMMIT');
+
+    // Check if status transitioned to pending_review
+    if (existing.rows[0].status === 'draft' && updateResult.rows[0].status === 'pending_review') {
+      const source = req.user?.role === 'contributor' ? 'contributor' : 'admin';
+      const contributorLabel = req.user?.role === 'contributor' ? req.user.label : existing.rows[0].contributed_by;
+      sendSpeciesSubmissionNotification(updateResult.rows[0], source, contributorLabel);
+    }
+
+    // Invalidate Redis cache for this species (public_id if available)
+    try {
+      const publicId = updateResult.rows[0].public_id || existing.rows[0].public_id;
+      if (publicId) {
+        await redisClient.del(`species:data:${publicId}`).catch(() => {});
+        await redisClient.del(`prerender:species:${publicId}`).catch(() => {});
+      }
+    } catch (e) {
+      // ignore redis errors
+    }
+
     invalidateStatsCache();
 
     res.json({
@@ -1073,6 +1332,37 @@ async function updateSpecies(req, res, next) {
 async function deleteSpecies(req, res, next) {
   try {
     const { id } = req.params;
+
+    // Fetch species info for permission checks and cache invalidation
+    let publicId = null;
+    let speciesRow = null;
+    try {
+      const pidRes = await pool.query('SELECT public_id, status, contributed_by FROM species WHERE id = $1', [id]);
+      if (pidRes.rows.length > 0) {
+        speciesRow = pidRes.rows[0];
+        publicId = speciesRow.public_id;
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Contributor permission checks
+    if (req.user?.role === 'contributor' && speciesRow) {
+      // Contributors can only delete their own species
+      if (speciesRow.contributed_by !== req.user.label) {
+        return res.status(403).json({
+          success: false,
+          message: 'You can only delete species you submitted.',
+        });
+      }
+      // Contributors cannot delete published species
+      if (speciesRow.status === 'published') {
+        return res.status(403).json({
+          success: false,
+          message: 'Published species cannot be deleted by contributors.',
+        });
+      }
+    }
 
     // 1. Find locally uploaded images to clean up from disk
     const imgResult = await pool.query(
@@ -1120,6 +1410,14 @@ async function deleteSpecies(req, res, next) {
       success: true,
       message: `Species "${result.rows[0].scientific_name}" deleted successfully`,
     });
+    // Invalidate Redis cache for this species if we had a public id
+    try {
+      if (publicId) {
+        await redisClient.del(`species:data:${publicId}`).catch(() => {});
+        await redisClient.del(`prerender:species:${publicId}`).catch(() => {});
+      }
+    } catch (e) {}
+
     invalidateStatsCache();
   } catch (err) {
     next(err);
@@ -1138,7 +1436,9 @@ function invalidateStatsCache() { statsCache.public = null; statsCache.admin = n
 async function getStats(req, res, next) {
   try {
     const isAdmin = isAdminAuthorized(req);
-    const cacheKey = isAdmin ? 'admin' : 'public';
+    const scope = req.query.scope; // 'admin' or 'published'
+    const forAdmin = isAdmin && scope === 'admin';
+    const cacheKey = forAdmin ? 'admin' : 'public';
 
     // Return cached stats if still fresh
     const cached = statsCache[cacheKey];
@@ -1148,23 +1448,46 @@ async function getStats(req, res, next) {
 
     const result = await pool.query(`
       SELECT
-        COUNT(*) AS total,
-        COUNT(*) FILTER (WHERE category = 'flora') AS flora_count,
-        COUNT(*) FILTER (WHERE category = 'fauna') AS fauna_count,
-        COUNT(*) FILTER (WHERE status = 'published') AS published_count
-        ${isAdmin ? `,
+        COUNT(*) FILTER (WHERE status = 'published') AS published_count,
+        COUNT(*) FILTER (WHERE status = 'published' AND category = 'flora') AS published_flora_count,
+        COUNT(*) FILTER (WHERE status = 'published' AND category = 'fauna') AS published_fauna_count,
+        COUNT(*) AS total_all,
+        COUNT(*) FILTER (WHERE category = 'flora') AS flora_all,
+        COUNT(*) FILTER (WHERE category = 'fauna') AS fauna_all,
         COUNT(*) FILTER (WHERE status = 'draft') AS draft_count,
-        COUNT(*) FILTER (WHERE status = 'pending_review') AS pending_count` : ''}
+        COUNT(*) FILTER (WHERE status = 'pending_review') AS pending_count
       FROM species
-      ${isAdmin ? '' : `WHERE status = 'published'`}
     `);
 
+    const row = result.rows[0];
+    let statsData;
+    if (forAdmin) {
+      statsData = {
+        total: parseInt(row.total_all, 10),
+        flora_count: parseInt(row.flora_all, 10),
+        fauna_count: parseInt(row.fauna_all, 10),
+        published_count: parseInt(row.published_count, 10),
+        draft_count: parseInt(row.draft_count, 10),
+        pending_count: parseInt(row.pending_count, 10),
+      };
+    } else {
+      // Home page / public metrics: ALWAYS published counts only
+      statsData = {
+        total: parseInt(row.published_count, 10),
+        flora_count: parseInt(row.published_flora_count, 10),
+        fauna_count: parseInt(row.published_fauna_count, 10),
+        published_count: parseInt(row.published_count, 10),
+        draft_count: 0,
+        pending_count: 0,
+      };
+    }
+
     // Cache the result
-    statsCache[cacheKey] = { data: result.rows[0], timestamp: Date.now() };
+    statsCache[cacheKey] = { data: statsData, timestamp: Date.now() };
 
     res.json({
       success: true,
-      data: result.rows[0],
+      data: statsData,
     });
   } catch (err) {
     next(err);
@@ -1190,6 +1513,8 @@ async function createContribution(req, res, next) {
     const description = normalizeOptionalString(req.body.description, FIELD_LIMITS.description);
     const habitat = normalizeOptionalString(req.body.habitat, FIELD_LIMITS.habitat);
     const taxonomy = normalizeTaxonomy(req.body.taxonomy);
+    const taxonomic_authority = normalizeOptionalString(req.body.taxonomy?.taxonomic_authority, 255);
+    const authority_year = normalizeAssessmentYear(req.body.taxonomy?.authority_year);
 
     if (!scientific_name || !category) {
       return res.status(400).json({
@@ -1229,8 +1554,8 @@ async function createContribution(req, res, next) {
 
     if (taxonomy) {
       await client.query(
-        `INSERT INTO taxonomy (species_id, kingdom, phylum, class, "order", family, genus)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO taxonomy (species_id, kingdom, phylum, class, "order", family, genus, taxonomic_authority, authority_year)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           speciesResult.rows[0].id,
           taxonomy.kingdom,
@@ -1239,6 +1564,8 @@ async function createContribution(req, res, next) {
           taxonomy.order,
           taxonomy.family,
           taxonomy.genus,
+          taxonomic_authority,
+          authority_year,
         ]
       );
     }
@@ -1250,6 +1577,9 @@ async function createContribution(req, res, next) {
       message: 'Contribution submitted successfully and saved as draft',
       data: speciesResult.rows[0],
     });
+
+    // Send email notification to admin (fire-and-forget)
+    sendSpeciesSubmissionNotification(speciesResult.rows[0], 'public', null);
   } catch (err) {
     await client.query('ROLLBACK');
     const mappedError = mapPgError(err);
@@ -1304,6 +1634,42 @@ async function uploadImage(req, res, next) {
       message: 'Image uploaded successfully',
       data: result.rows[0],
     });
+    // Invalidate cached species HTML/data for this species (if public_id exists)
+    try {
+      const spRes = await pool.query('SELECT public_id FROM species WHERE id = $1', [id]);
+      const publicId = spRes.rows[0] ? spRes.rows[0].public_id : null;
+      if (publicId) {
+        await redisClient.del(`species:data:${publicId}`).catch(() => {});
+        await redisClient.del(`prerender:species:${publicId}`).catch(() => {});
+      }
+    } catch (e) {
+      // ignore redis errors
+    }
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ============================================================
+// CHECK SCIENTIFIC NAME AVAILABILITY
+// ============================================================
+async function checkNameAvailability(req, res, next) {
+  try {
+    const { scientific_name } = req.query;
+    if (!scientific_name) {
+      return res.status(400).json({ success: false, message: 'scientific_name is required' });
+    }
+
+    const { pool } = require('../config/db');
+    const result = await pool.query(
+      'SELECT id FROM species WHERE LOWER(scientific_name) = LOWER($1)',
+      [scientific_name.trim()]
+    );
+
+    return res.status(200).json({
+      success: true,
+      exists: result.rows.length > 0
+    });
   } catch (err) {
     next(err);
   }
@@ -1312,10 +1678,12 @@ async function uploadImage(req, res, next) {
 module.exports = {
   getAllSpecies,
   getSpeciesById,
+  getSpeciesPreview,
   createContribution,
   createSpecies,
   updateSpecies,
   deleteSpecies,
   getStats,
   uploadImage,
+  checkNameAvailability,
 };

@@ -44,6 +44,20 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 // ============================================================
+// WWW → NON-WWW REDIRECT (301 permanent)
+// ============================================================
+if (process.env.NODE_ENV === 'production') {
+  app.use((req, res, next) => {
+    const host = req.hostname || req.headers.host;
+    if (host && host.startsWith('www.')) {
+      const newHost = host.replace(/^www\./, '');
+      return res.redirect(301, `https://${newHost}${req.originalUrl}`);
+    }
+    next();
+  });
+}
+
+// ============================================================
 // BOT DETECTION HELPER
 // ============================================================
 // Identifies search engine & social media bots to exclude from rate limiting
@@ -80,7 +94,8 @@ app.use((req, res, next) => {
 app.use(async (req, res, next) => {
   try {
     if (req.method === 'GET' && req.isBot) {
-      const speciesMatch = req.path.match(/^\/species\/(\d+)$/);
+      // Match any slug (public_id is alphanumeric, not just numeric)
+    const speciesMatch = req.path.match(/^\/species\/([^\/]+)\/?$/);
       if (speciesMatch) {
         const speciesId = speciesMatch[1];
         const html = await prerender.generateSpeciesHtml(speciesId, req);
@@ -243,6 +258,9 @@ app.use('/api/admin', adminRoutes);
 const teamRoutes = require('./routes/team');
 app.use('/api/team', teamRoutes);
 
+const noticeRoutes = require('./routes/notice');
+app.use('/api/notice', noticeRoutes);
+
 // (Image proxy is mounted earlier, before rate limiters — see above)
 
 // Reports routes — problem reporting (public post, admin get/update)
@@ -256,6 +274,10 @@ app.use(seoRoutes);
 // API docs — OpenAPI-style JSON for consumers
 const apiDocsRoutes = require('./routes/apiDocs');
 app.use('/api', apiDocsRoutes);
+
+// Public Dataset Data Dump routes for researchers
+const publicDataRoutes = require('./routes/publicData');
+app.use('/api/public', publicDataRoutes);
 
 // ============================================================
 // PRODUCTION: Serve React Frontend
@@ -290,6 +312,24 @@ if (process.env.NODE_ENV === 'production') {
 
   // SPA fallback — any non-API route serves index.html so React Router works
   // Using Regex /.*/ instead of '*' to prevent Express 5 / path-to-regexp v8 errors
+  // Publicly serve the admin login SPA route so unauthenticated users can reach the login UI.
+  app.get('/admin/login', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    return res.sendFile(path.join(frontendPath, 'index.html'));
+  });
+
+  // Protect admin SPA routes and species preview SPA routes server-side: require adminAuth before returning index.html
+  // This prevents unauthenticated users from loading the admin UI bundle or previewing drafts.
+  app.get(/^\/(admin|species\/preview)(\/.*)?$/, adminAuth, (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    return res.sendFile(path.join(frontendPath, 'index.html'));
+  });
+
+  // SPA fallback for public routes
   app.get(/.*/, (_req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
